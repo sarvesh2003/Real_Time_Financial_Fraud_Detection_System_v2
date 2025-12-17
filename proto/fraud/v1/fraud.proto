@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package fraud;
+
+option go_package = "./pb";
+
+service FraudIngestion {
+  rpc SendTransaction (TransactionRequest) returns (IngestionResponse);
+}
+
+message TransactionRequest {
+  string transaction_id = 1;
+  int64 user_id = 2;
+  double amount = 3;
+  int64 timestamp = 4;
+  bool is_fraud = 5;
+
+  string type = 6;
+  double old_balance_orig = 7;
+  double new_balance_orig = 8;
+  double old_balance_dest = 9;
+  double new_balance_dest = 10;
+  double is_unauthorized_overdraft = 11;
+}
+
+message IngestionResponse {
+  bool success = 1;
+  string message = 2;
+}

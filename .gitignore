@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+
+venv/
+.env
+
+.vscode/
+
+*.log
+docker-compose.override.yml
+
+.DS_Store
+Thumbs.db
