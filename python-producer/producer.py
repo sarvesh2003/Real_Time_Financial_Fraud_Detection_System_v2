@@ -6,8 +6,8 @@ import grpc
 import pandas as pd
 from sdv.single_table import GaussianCopulaSynthesizer
 
-import fraud_pb2
-import fraud_pb2_grpc
+from proto.fraud.v1 import fraud_pb2
+from proto.fraud.v1 import fraud_pb2_grpc
 
 MODEL_PATH = 'model_gaussian_20L.pkl'
 SERVER_ADDR = os.getenv('GRPC_SERVER_ADDRESS', 'localhost:50051')
