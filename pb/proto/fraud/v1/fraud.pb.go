@@ -24,7 +24,7 @@ const (
 type TransactionRequest struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	TransactionId           string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
-	UserId                  int64                  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	UserId                  string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Amount                  float64                `protobuf:"fixed64,3,opt,name=amount,proto3" json:"amount,omitempty"`
 	Timestamp               int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	IsFraud                 bool                   `protobuf:"varint,5,opt,name=is_fraud,json=isFraud,proto3" json:"is_fraud,omitempty"`
@@ -34,6 +34,7 @@ type TransactionRequest struct {
 	OldBalanceDest          float64                `protobuf:"fixed64,9,opt,name=old_balance_dest,json=oldBalanceDest,proto3" json:"old_balance_dest,omitempty"`
 	NewBalanceDest          float64                `protobuf:"fixed64,10,opt,name=new_balance_dest,json=newBalanceDest,proto3" json:"new_balance_dest,omitempty"`
 	IsUnauthorizedOverdraft float64                `protobuf:"fixed64,11,opt,name=is_unauthorized_overdraft,json=isUnauthorizedOverdraft,proto3" json:"is_unauthorized_overdraft,omitempty"`
+	IpAddress               string                 `protobuf:"bytes,12,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -75,11 +76,11 @@ func (x *TransactionRequest) GetTransactionId() string {
 	return ""
 }
 
-func (x *TransactionRequest) GetUserId() int64 {
+func (x *TransactionRequest) GetUserId() string {
 	if x != nil {
 		return x.UserId
 	}
-	return 0
+	return ""
 }
 
 func (x *TransactionRequest) GetAmount() float64 {
@@ -145,6 +146,13 @@ func (x *TransactionRequest) GetIsUnauthorizedOverdraft() float64 {
 	return 0
 }
 
+func (x *TransactionRequest) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
 type IngestionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -201,10 +209,10 @@ var File_proto_fraud_v1_fraud_proto protoreflect.FileDescriptor
 
 const file_proto_fraud_v1_fraud_proto_rawDesc = "" +
 	"\n" +
-	"\x1aproto/fraud/v1/fraud.proto\x12\x05fraud\"\x9d\x03\n" +
+	"\x1aproto/fraud/v1/fraud.proto\x12\x05fraud\"\xbc\x03\n" +
 	"\x12TransactionRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x16\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x16\n" +
 	"\x06amount\x18\x03 \x01(\x01R\x06amount\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\x12\x19\n" +
 	"\bis_fraud\x18\x05 \x01(\bR\aisFraud\x12\x12\n" +
@@ -214,7 +222,9 @@ const file_proto_fraud_v1_fraud_proto_rawDesc = "" +
 	"\x10old_balance_dest\x18\t \x01(\x01R\x0eoldBalanceDest\x12(\n" +
 	"\x10new_balance_dest\x18\n" +
 	" \x01(\x01R\x0enewBalanceDest\x12:\n" +
-	"\x19is_unauthorized_overdraft\x18\v \x01(\x01R\x17isUnauthorizedOverdraft\"G\n" +
+	"\x19is_unauthorized_overdraft\x18\v \x01(\x01R\x17isUnauthorizedOverdraft\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\f \x01(\tR\tipAddress\"G\n" +
 	"\x11IngestionResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage2X\n" +

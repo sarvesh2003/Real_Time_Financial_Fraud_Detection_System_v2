@@ -74,7 +74,7 @@ func main() {
 						// Push to DLQ (to do later)
 						continue;
 					}
-					log.Printf("Transaction values: Txn Id=%s, UserId=%d, Amount=%.2f", txn.TransactionId, txn.UserId, txn.Amount)
+					log.Printf("Transaction values: IP Address=%s, Txn Id=%s, UserId=%d, Amount=%.2f", txn.IpAddress, txn.TransactionId, txn.UserId, txn.Amount)
 
 				case kafka.PartitionEOF:
 					fmt.Printf("%% Reached %v\n", e)
@@ -90,7 +90,7 @@ func main() {
 
 
 	// Check if IP address is valid or not. If not valid push to DLQ and continue
-
+	
 	// Check whether we have that entry in Redis few mins back
 
 	// If not in Redis, Use maxmind and enrich it

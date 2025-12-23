@@ -3,6 +3,7 @@ import uuid
 import random
 import os
 import grpc
+import csv
 import pandas as pd
 from sdv.single_table import GaussianCopulaSynthesizer
 
@@ -11,8 +12,18 @@ from proto.fraud.v1 import fraud_pb2_grpc
 
 MODEL_PATH = 'model_gaussian_20L.pkl'
 SERVER_ADDR = os.getenv('GRPC_SERVER_ADDRESS', 'localhost:50051')
+USERIDS_PATH = "userIds_10k.csv"
+USERIDS_LIMIT = 30
 
-USER_IDS = [1001, 1002, 1003, 1004, 1005, 9999]
+USER_IDS = []
+
+with open(USERIDS_PATH, mode='r', newline='', encoding='utf-8') as csvFile:
+    reader = csv.reader(csvFile)
+    next(reader)
+    for row in reader:
+        USER_IDS.append(row[0])
+
+USER_IDS = USER_IDS[:USERIDS_LIMIT]
 
 def run_producer():
     print(f"...Loading model from {MODEL_PATH}...")
@@ -43,7 +54,8 @@ def run_producer():
                     new_balance_orig = float(sample['newBalanceOrig']),
                     old_balance_dest = float(sample['oldBalanceDest']),
                     new_balance_dest = float(sample['newBalanceDest']),
-                    is_unauthorized_overdraft = float(sample['isUnauthorizedOverdraft'])
+                    is_unauthorized_overdraft = float(sample['isUnauthorizedOverdraft']),
+                    ip_address = "RANDOM IP"
                 )
 
                 response = stub.SendTransaction(req)
