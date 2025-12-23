@@ -46,3 +46,14 @@ services:
       - GRPC_SERVER_ADDRESS=go-server:50051
     depends_on:
       - go-server
+  
+  go-enricher:
+    build:
+      context: .
+      dockerfile: go-enricher/Dockerfile
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - KAFKA_CONSUMER_TOPICS_ENRICHER=raw_transactions
+    depends_on:
+      - kafka
+    restart: on-failure
