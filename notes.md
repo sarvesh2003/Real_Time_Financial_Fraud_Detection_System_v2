@@ -53,3 +53,7 @@ go mod tidy
 - Python producers - DONE
 - Go using buffered channels to accept requests and push the messages to Kafka using a Worker Pool - DONE
 - Integrating Dockerized Kafka with Go and complete the flow for raw transactions - TO DO
+
+
+## COMMON ISSUES:
+- When protoc compiles your .proto files into Go code, it automatically changes your field names from snake_case (used in Protobuf) to CamelCase (used in Go). This is required because in Go, a field must start with a Capital Letter to be visible (exported) outside the struct.
