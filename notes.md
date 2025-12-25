@@ -46,6 +46,7 @@ go mod init fraud
 go get google.golang.org/grpc@latest
 go get google.golang.org/protobuf@latest
 go get github.com/confluentinc/confluent-kafka-go@latest
+go get github.com/redis/go-redis/v9
 go mod tidy
 ```
 
@@ -57,3 +58,17 @@ go mod tidy
 
 ## COMMON ISSUES:
 - When protoc compiles your .proto files into Go code, it automatically changes your field names from snake_case (used in Protobuf) to CamelCase (used in Go). This is required because in Go, a field must start with a Capital Letter to be visible (exported) outside the struct.
+
+## Go-enricher
+- Retry is required in initialize_reddis() so that the CLUSTERDOWN error can be mitigated. Along with that add depends on in Docker compose.
+- Root cause of CLUSTERDOWN issue - script did not wait for the sequence of steps to complete
+- Sequence of steps in the Redis startup
+	- Redis - 1, 2, and 3 start up. Completely isolated and owns 0 hash slots
+	- redis-cluster-setup container runs the cluster create command
+	- The script sends a CLUSTER MEET command to all nodes, introducing them to each other
+	- Slot assignment: Node 1 (slots 0 to 5460), Node 2 (slots 5461 - 10922), Node 3 (10923 - 16383)
+	- Gossip protocol: Nodes use a separate port (cluster bus port: 16379) to rapidly exchange binary packets to make sure all the nodes agree with the slot assignment
+	- Consensus: Once all the nodes have received updates from all peers and updated their interal cluster map, the state changes from FAIL/LOADING to OK
+
+## REFERENCES
+[1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]
