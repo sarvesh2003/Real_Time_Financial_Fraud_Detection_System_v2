@@ -12,6 +12,7 @@ import (
     "github.com/confluentinc/confluent-kafka-go/kafka"
 	"google.golang.org/protobuf/proto"
 	"github.com/redis/go-redis/v9"
+	"github.com/oschwald/geoip2-golang"
 
 	pb "fraud-enricher/pb"
 )
@@ -61,6 +62,35 @@ func initialize_redis() *redis.ClusterClient {
 	return client
 }
 
+func initialize_maxmindDB() (*geoip2.Reader, *geoip2.Reader, func(), error) {
+	cityDb, err := geoip2.Open("/data/geoip/GeoLite2-City.mmdb")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("Issues while opening City DB")
+	}
+	asnDB, err := geoip2.Open("/data/geoip/GeoLite2-ASN.mmdb")
+	if err != nil {
+		cityDb.Close()
+		return nil, nil, nil, fmt.Errorf("Issues while opening the ans db")
+	}
+
+	cleanup := func() {
+		fmt.Println("Cleaning up and closing all the DBs")
+		cityDb.Close()
+		asnDB.Close()
+	}
+
+	return cityDb, asnDB, cleanup, nil
+
+}
+
+func maxMindDBLookup(ip string, cityDb *geoip2.Reader, asnDB *geoip2.Reader) {
+	ans := net.ParseIP(ip)
+	city, _ := cityDb.City(ans)
+	asn, _ := asnDB.ASN(ans)
+	fmt.Printf("MAXMIND WORKING: City=%s, Lat=%.2f, Lon=%.2f, IsAnonProxy=%t, ASNSystemOrg=%s\n", city.City.Names["en"], city.Location.Latitude, city.Location.Longitude, city.Traits.IsAnonymousProxy, asn.AutonomousSystemOrganization)
+}
+
+
 func main() {
 
 	// Kafka Consumer setup
@@ -97,6 +127,14 @@ func main() {
 	client := initialize_redis()
 	ctx := context.Background()
 	time.Sleep(10 * time.Second)
+
+	// Initializing MaxMindDB
+	cityDb, asnDB, cleanUpDB, err := initialize_maxmindDB()
+	if err != nil {
+		fmt.Println("WARNING: SOME ISSUE WITH THE DB CONNECTIONS... RESOLVE THIS ASAP")
+	}
+
+	defer cleanUpDB()
 
 	err = client.Set(ctx, "foo", "bar", 0).Err()
 	if err != nil {
@@ -138,7 +176,9 @@ func main() {
 					
 					// If valid, Check whether we have that entry in Redis few mins back, else add it
 					if is_valid_ip {
-						
+						maxMindDBLookup(txn.IpAddress, cityDb, asnDB)
+					} else {
+						// Push to DLQ
 					}
 
 
@@ -159,6 +199,7 @@ func main() {
 	// If not in Redis, Use maxmind and enrich it
 
 	// Push the enriched txn to Enriched transaction Kafka topic
-
+	// /data/geoip/GeoLite2-City.mmdb
+	// /data/geoip/GeoLite2-ASN.mmdb
 }
 
