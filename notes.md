@@ -69,6 +69,17 @@ go mod tidy
 	- Slot assignment: Node 1 (slots 0 to 5460), Node 2 (slots 5461 - 10922), Node 3 (10923 - 16383)
 	- Gossip protocol: Nodes use a separate port (cluster bus port: 16379) to rapidly exchange binary packets to make sure all the nodes agree with the slot assignment
 	- Consensus: Once all the nodes have received updates from all peers and updated their interal cluster map, the state changes from FAIL/LOADING to OK
+- Maxmind
+  - geoip-data:/usr/share/GeoIP => HARDCODED VALUE IN MAXMIND'S official docker image
+- Go's anonymous functions are similar to lambda's in Java but here, they are treated as functions, but in Java, lambdas are treated as objects that implement a functional interface.
+
+## CHANGES
+- Changing BankingAgent with a Pre-generated set of domestic locations which can be reused and to get cache hit in redis
+
 
 ## REFERENCES
 [1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]
+[2] https://redis.io/docs/latest/develop/clients/go/connect/ [REDIS DOCUMENTATION - 1]
+[3] https://redis.io/docs/latest/develop/clients/go/ [REDIS DOCUMENTATION - 2]
+[4] https://pkg.go.dev/github.com/oschwald/geoip2-golang [FOR WRITING MMDB LOOKUP LOGIC IN ENRICHER]
+[5] https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar [Sidecar pattern]

@@ -56,8 +56,13 @@ class BankingAgent(Agent):
         super().__init__(model)
         self.unique_id = unique_id
         self.fake = Faker()
-        self.home_ip = self.fake.ipv4_public(network=True)
+        self.home_ip = self.fake.ipv4_public()
         self.home_subnet = ".".join(self.home_ip.split('.')[:2])
+        # Pre-generating a set of domestic locations to reuse
+        self.domestic_pool = [
+            f"{self.home_ip.split('.')[0]}.{random.randint(10,99)}.{random.randint(0,255)}.{random.randint(1,254)}"
+            for _ in range(3)
+        ]
 
     # Decides the IP address for a specific transaction based on fraud status.
     def generate_context_ip(self, is_fraud):
@@ -69,11 +74,15 @@ class BankingAgent(Agent):
         return self._get_ip_from_scenario(scenario)
 
     def _get_ip_from_scenario(self, scenario):
-        if scenario in ['HOME', 'HOME_SPOOF']:
-            return f"{self.home_subnet}.{random.randint(0,255)}.{random.randint(1,255)}"
+        if scenario == 'HOME':
+            return self.home_ip
+            # return f"{self.home_subnet}.{random.randint(0,255)}.{random.randint(1,255)}"
+        elif scenario == "HOME_SPOOF":
+             return f"{self.home_subnet}.{random.randint(0,255)}.{random.randint(1,255)}"
         elif scenario == 'DOMESTIC':
-            octet1 = self.home_ip.split('.')[0] # Same Country, different region
-            return f"{octet1}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,255)}"
+            return random.choice(self.domestic_pool) # RESUE
+            # octet1 = self.home_ip.split('.')[0] # Same Country, different region
+            # return f"{octet1}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,255)}"
         else:
             return self.fake.ipv4_public() # Completely random
 

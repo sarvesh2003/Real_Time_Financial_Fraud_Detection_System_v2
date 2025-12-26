@@ -67,8 +67,12 @@ services:
         condition: service_started
       redis-cluster-setup:
         condition: service_completed_successfully
+      geoip-updater:
+        condition: service_started
     networks:
-      - redis-cluster-net   # Needed to talk to Redis 1, 2, 3
+      - redis-cluster-net
+    volumes:
+      - geoip-data:/data/geoip:ro
     restart: on-failure
 
   redis1:
@@ -130,6 +134,17 @@ services:
       redis-cluster-net:
         ipv4_address: 192.168.240.103
 
+  geoip-updater:
+    image: maxmindinc/geoipupdate
+    environment:
+      - GEOIPUPDATE_ACCOUNT_ID=${GEOIPUPDATE_ACCOUNT_ID}
+      - GEOIPUPDATE_LICENSE_KEY=${GEOIPUPDATE_LICENSE_KEY}
+      - GEOIPUPDATE_EDITION_IDS=${GEOIPUPDATE_EDITION_IDS}
+      - GEOIPUPDATE_FREQUENCY=${GEOIPUPDATE_FREQUENCY}
+    volumes:
+      - geoip-data:/usr/share/GeoIP
+    restart: unless-stopped
+
 networks:
   redis-cluster-net:
     driver: bridge
@@ -139,3 +154,6 @@ networks:
       config:
         - subnet: 192.168.240.0/24
           gateway: 192.168.240.1
+
+volumes:
+  geoip-data:
