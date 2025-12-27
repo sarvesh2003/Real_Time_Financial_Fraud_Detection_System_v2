@@ -1,250 +1,23 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"net"
+	"log"
 	"os"
 	"os/signal"
-	"log"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
-    "github.com/confluentinc/confluent-kafka-go/kafka"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"google.golang.org/protobuf/proto"
-	"github.com/redis/go-redis/v9"
-	"github.com/oschwald/geoip2-golang"
 
 	pb "fraud-enricher/pb"
 )
 
-type GeoData struct {
-	City        string  `json:"city"`
-	Country     string  `json:"country"`
-	CountryCode string  `json:"country_code"`
-	Latitude    float64 `json:"lat"`
-	Longitude   float64 `json:"lon"`
-	ASN         string  `json:"asn"`
-	ISP         string  `json:"isp"`
-	IsHosting   bool    `json:"is_hosting"`
-}
-
-type FraudSignals struct {
-	FirstSeen      time.Time `json:"first_seen"`
-	LastSeen       time.Time `json:"last_seen"`
-	TxnCount       int       `json:"txn_count"`
-	TotalAmount    float64   `json:"total_amount"`
-	AmountVelocity float64   `json:"amount_velocity"`
-	AvgAmount      float64   `json:"avg_amount"`
-	MaxAmount      float64   `json:"max_amount"`
-}
-
-func isHostingProvider(isp string) bool {
-	keywordsEnv := os.Getenv("HOSTING_KEYWORDS")
-	var keywords []string
-	
-	if keywordsEnv != "" {
-		keywords = strings.Split(keywordsEnv, ",")
-	} else {
-		keywords = []string{
-			"amazon", "aws", "google", "azure", "microsoft",
-			"digitalocean", "ovh", "hetzner", "linode",
-			"vultr", "cloudflare", "hosting", "datacenter",
-			"vpn", "proxy", "colocation",
-		}
-	}
-	
-	ispLower := strings.ToLower(isp)
-	for _, keyword := range keywords {
-		if strings.Contains(ispLower, strings.TrimSpace(keyword)) {
-			return true
-		}
-	}
-	return false
-}
-
-func getGeoFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*GeoData, string, error) {
-	geoIp := "geo:" + ip
-	value, err := client.Get(ctx, geoIp).Result()
-	if err == redis.Nil {
-		// Entry not found
-		return nil, "MISS", nil
-	} else if err != nil {
-		// Some issue
-		return nil, "REDDIS_ISSUE", err
-	}
-	geo := &GeoData{}
-	err = json.Unmarshal([]byte(value), geo)
-	if err != nil {
-		return nil, "UNMARSHALING_ISSUE", err
-	}
-
-	return geo, "HIT", nil
-}
-
-func setGeoToRedis(client *redis.ClusterClient, ctx context.Context, ip string, geodata GeoData) (string, error) {
-	geoIp := "geo:" + ip
-	geoJson, err := json.Marshal(geodata)
-	if err != nil {
-		return "MARSHAL_ISSUE", err
-	}
-	ttlHours := 24
-	if ttlEnv := os.Getenv("GEO_TTL_HOURS"); ttlEnv != "" {
-		if parsed, err := strconv.Atoi(ttlEnv); err == nil {
-			ttlHours = parsed
-		}
-	}
-	err = client.Set(ctx, geoIp, geoJson, time.Duration(ttlHours)*time.Hour).Err()
-	if err != nil {
-		return "REDIS_SET_FAILED", err
-	}
-	return "REDIS_SET_SUCCESS", nil
-}
-
-func getFraudFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*FraudSignals, string, error) {
-	fraudKey := "fraud:" + ip
-	value, err := client.Get(ctx, fraudKey).Result()
-	
-	if err == redis.Nil {
-		return nil, "MISS", nil
-	} else if err != nil {
-		return nil, "REDIS_ISSUE", err
-	}
-	
-	fraud := &FraudSignals{}
-	err = json.Unmarshal([]byte(value), fraud)
-	if err != nil {
-		return nil, "UNMARSHAL_ISSUE", err
-	}
-	
-	return fraud, "HIT", nil
-}
-
-func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip string, amount float64) (*FraudSignals, error) {
-	fraudKey := "fraud:" + ip	
-	fraud, status, err := getFraudFromRedis(client, ctx, ip)
-	
-	if status == "MISS" {
-		fraud = &FraudSignals{
-			FirstSeen:      time.Now(),
-			LastSeen:       time.Now(),
-			TxnCount:       1,
-			TotalAmount:    amount,
-			AmountVelocity: 0,
-			AvgAmount:      amount,
-			MaxAmount:      amount,
-		}
-		log.Printf("NEW IP in fraud tracking: %s (Amount: $%.2f)", ip, amount)
-		
-	} else if err != nil {
-		return nil, fmt.Errorf("redis get failed: %w", err)
-		
-	} else {		
-		fraud.LastSeen = time.Now()
-		fraud.TxnCount++
-		fraud.TotalAmount += amount
-
-		duration := time.Since(fraud.FirstSeen).Hours()
-		if duration > 0 {
-			fraud.AmountVelocity = fraud.TotalAmount / duration
-		}
-		
-		fraud.AvgAmount = fraud.TotalAmount / float64(fraud.TxnCount)
-		if amount > fraud.MaxAmount {
-			fraud.MaxAmount = amount
-		}
-		
-		log.Printf("UPDATED fraud data: IP=%s | Count=%d | Total=$%.2f | Velocity=$%.2f/h",
-			ip, fraud.TxnCount, fraud.TotalAmount, fraud.AmountVelocity)
-	}
-	
-	fraudJSON, err := json.Marshal(fraud)
-	if err != nil {
-		return nil, fmt.Errorf("marshal failed: %w", err)
-	}
-
-	err = client.Set(ctx, fraudKey, fraudJSON, 2*time.Hour).Err()
-	if err != nil {
-		return nil, fmt.Errorf("redis set failed: %w", err)
-	}
-	
-	return fraud, nil
-}
-
-func validateIP(ip string) bool {
-	  ans := net.ParseIP(ip)
-	  if ans == nil {
-		return false
-	  }
-	  return true
-}
-
-func initialize_redis() (*redis.ClusterClient, context.Context) {
-	client := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{
-			"192.168.240.100:6379",
-			"192.168.240.101:6379",
-			"192.168.240.102:6379",
-		},
-		RouteByLatency: true,
-	})
-
-	ctx := context.Background()
-	fmt.Println("Attempting to connect to Redis Cluster...")
-
-    // Retry
-	for i := 0; i < 30; i++ {
-		err := client.Set(ctx, "health_check", "ok", 5*time.Second).Err()
-
-		if err == nil {
-			fmt.Println("SUCCESS: Connected to Redis Cluster!")
-			break
-		}
-
-		fmt.Printf("Waiting for Cluster to stabilize (Attempt %d/30): %v\n", i+1, err)
-		time.Sleep(2 * time.Second)
-	}
-
-	val, err := client.Get(ctx, "health_check").Result()
-	if err != nil {
-		fmt.Printf("Warning: Cluster might still be unstable: %v\n", err)
-	} else {
-		fmt.Println("Health check verify value:", val)
-	}
-
-	return client, ctx
-}
-
-func initialize_maxmindDB() (*geoip2.Reader, *geoip2.Reader, func(), error) {
-	cityDb, err := geoip2.Open("/data/geoip/GeoLite2-City.mmdb")
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("Issues while opening City DB")
-	}
-	asnDB, err := geoip2.Open("/data/geoip/GeoLite2-ASN.mmdb")
-	if err != nil {
-		cityDb.Close()
-		return nil, nil, nil, fmt.Errorf("Issues while opening the ans db")
-	}
-
-	cleanup := func() {
-		fmt.Println("Cleaning up and closing all the DBs")
-		cityDb.Close()
-		asnDB.Close()
-	}
-
-	return cityDb, asnDB, cleanup, nil
-
-}
-
-func maxMindDBLookup(ip string, cityDb *geoip2.Reader, asnDB *geoip2.Reader) (*geoip2.City, *geoip2.ASN) {
-	ans := net.ParseIP(ip)
-	city, _ := cityDb.City(ans)
-	asn, _ := asnDB.ASN(ans)
-	return city, asn
-}
-
+const (
+	fromKafkaTopic = "raw_transactions"
+	toKafkaTopic   = "enriched_transactions"
+)
 
 func main() {
 
@@ -265,7 +38,7 @@ func main() {
 	// Subscribe to Raw transactions Kafka topic
 	kafkaConsumerTopics := os.Getenv("KAFKA_CONSUMER_TOPICS_ENRICHER")
 	if kafkaConsumerTopics == "" {
-		kafkaConsumerTopics = "raw_transactions"
+		kafkaConsumerTopics = fromKafkaTopic
 	}
 	err = consumer.SubscribeTopics([]string {kafkaConsumerTopics}, nil)
 	
@@ -397,6 +170,8 @@ func main() {
 								txn.IpAddress, fraudData.TotalAmount)
 						}
 
+						// PUSH TO KAFKA AS PRODUCER
+
 					}
 
 					} else {
@@ -415,13 +190,5 @@ func main() {
 		
 	}
 	consumer.Close()
-
-	
-
-	// If not in Redis, Use maxmind and enrich it
-
-	// Push the enriched txn to Enriched transaction Kafka topic
-	// /data/geoip/GeoLite2-City.mmdb
-	// /data/geoip/GeoLite2-ASN.mmdb
 }
 
