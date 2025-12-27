@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -41,6 +42,17 @@ func main() {
 		kafkaConsumerTopics = fromKafkaTopic
 	}
 	err = consumer.SubscribeTopics([]string {kafkaConsumerTopics}, nil)
+
+	// Kafka Producer Setup
+	kafkaAddr_new := os.Getenv("KAFKA_BROKER")
+	if kafkaAddr_new == "" {
+		kafkaAddr_new = "localhost:9092"
+	}
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": kafkaAddr_new})
+	if err != nil {
+		log.Fatalf("Failed to create producer: %v", err)
+	}
+	defer p.Close()
 	
 	// Process message
 	MIN_COMMIT_COUNT := 20
@@ -171,6 +183,55 @@ func main() {
 						}
 
 						// PUSH TO KAFKA AS PRODUCER
+						enrichedTxn := EnrichedTransaction{
+							TransactionID: txn.TransactionId,
+							UserID: txn.UserId,
+							Amount: float64(txn.Amount),
+							Timestamp: txn.Timestamp,
+							IsFraud: txn.IsFraud,
+							Type: txn.Type,
+							OldBalanceOrig: float64(txn.OldBalanceOrig),
+							NewBalanceOrig: float64(txn.NewBalanceOrig),
+							OldBalanceDest: float64(txn.OldBalanceDest),
+							NewBalanceDest: float64(txn.NewBalanceDest),
+							IsUnauthorizedOverdraft: float64(txn.IsUnauthorizedOverdraft),
+							
+							IPAddress: txn.IpAddress,
+							City: geoData.City,
+							Country: geoData.Country,
+							CountryCode: geoData.CountryCode,
+							Latitude: geoData.Latitude,
+							Longitude: geoData.Longitude,
+							ASN: geoData.ASN,
+							ISP: geoData.ISP,
+							IsHosting: geoData.IsHosting,
+							
+							TxnCount2h: fraudData.TxnCount,
+							TotalAmount2h: fraudData.TotalAmount,
+							AmountVelocity: fraudData.AmountVelocity,
+							AvgAmount2h: fraudData.AvgAmount,
+							MaxAmount2h: fraudData.MaxAmount,
+						}
+
+						enrichedJSON, err := json.Marshal(enrichedTxn)
+						if err != nil {
+							log.Printf("JSON marshal failed: %v", err)
+							continue
+						}
+
+						err = p.Produce(&kafka.Message{
+							TopicPartition: kafka.TopicPartition{
+								Topic: &[]string{toKafkaTopic}[0],
+								Partition: kafka.PartitionAny,
+							},
+							Value: enrichedJSON,
+						}, nil)
+
+						if err != nil {
+							log.Printf("Kafka publish by Enricher failed: %v", err)
+						} else {
+							log.Printf("Published Enriched transaction to %s", toKafkaTopic)
+						}
 
 					}
 
