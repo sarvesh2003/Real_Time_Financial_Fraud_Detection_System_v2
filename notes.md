@@ -76,6 +76,11 @@ go mod tidy
 ## CHANGES
 - Changing BankingAgent with a Pre-generated set of domestic locations which can be reused and to get cache hit in redis
 
+## Design Choices (Consolidate later into a document)
+1. Redsync vs Lua Scripts for Redis concurrency
+  - RedSync is good for long running tasks outside Redis like api calls to 3rd party, DB updates etc. But latency is high and complexity is also high like handling retires, timeouts etc.
+  - Lua Scripts is good for fast data processing tasks inside Redis like Read count, increment etc. Latency is low and atomic by default
+  - Need to fix the issue in FraudProfile struct - here is where the counter is used and in case of GeoIP struct we don't use a counter, and a overwrite is fine.
 
 ## REFERENCES
 [1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]
@@ -83,3 +88,5 @@ go mod tidy
 [3] https://redis.io/docs/latest/develop/clients/go/ [REDIS DOCUMENTATION - 2]
 [4] https://pkg.go.dev/github.com/oschwald/geoip2-golang [FOR WRITING MMDB LOOKUP LOGIC IN ENRICHER]
 [5] https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar [Sidecar pattern]
+[6] https://medium.com/@nikhi.unni/redis-locking-with-lua-scripts-solving-race-conditions-in-threaded-applications-2e7c789dc235 [Race conditions in Go and how to handle them]
+[7] https://hackernoon.com/fixing-race-conditions-in-go-with-redis-based-distributed-locks [Redis-Go Concurrency example]
