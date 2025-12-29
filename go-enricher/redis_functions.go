@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"strconv"
 	"time"
 
@@ -14,12 +15,29 @@ import (
 
 // Lua script
 var updateFraud = redis.NewScript(`
-	local key = KEYS[1]
+	local fraud_key = KEYS[1]
+	local dedup_key = KEYS[2]
 	local amount = tonumber(ARGV[1])
 	local now = tonumber(ARGV[2])
+	local txn_id = ARGV[3]
+	local ttl = tonumber(ARGV[4])
 
-	local value = redis.call("GET", key)
+	-- Idempotency check
+	if redis.call("SISMEMBER", dedup_key, txn_id) == 1 then
+		local existing = redis.call("GET", fraud_key)
+		if existing then
+			return cjson.encode({data = cjson.decode(existing), duplicate = true})
+		else
+			return cjson.encode({data = {}, duplicate = true})
+		end
+	end
 
+	-- Mark Txn id as processed
+	redis.call("SADD", dedup_key, txn_id)
+	redis.call("EXPIRE", dedup_key, ttl)
+
+	local value = redis.call("GET", fraud_key)
+	
 	-- NEW IP, so add to redis
 	if not value then
 		local fraud_str = {
@@ -31,8 +49,8 @@ var updateFraud = redis.NewScript(`
 			avg_amount = amount,
 			max_amount = amount
 		}
-		redis.call("SET", key, cjson.encode(fraud_str), 'EX', 7200)
-		return cjson.encode(fraud_str)
+		redis.call("SET", fraud_key, cjson.encode(fraud_str), 'EX', ttl)
+		return cjson.encode({data = fraud_str, duplicate = false})
 	end
 
 	-- Already present, so update it
@@ -52,14 +70,14 @@ var updateFraud = redis.NewScript(`
 		fraud_data.max_amount = amount
 	end
 
-	redis.call("SET", key, cjson.encode(fraud_data), 'EX', 7200)
-	return cjson.encode(fraud_data)	
+	redis.call("SET", fraud_key, cjson.encode(fraud_data), 'EX', ttl)
+	return cjson.encode({data = fraud_data, duplicate = false})
 
 `)
 
 
 func getGeoFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*GeoData, string, error) {
-	geoIp := "geo:" + ip
+	geoIp := fmt.Sprintf("geo:{%s}", ip)
 	value, err := client.Get(ctx, geoIp).Result()
 	if err == redis.Nil {
 		// Entry not found
@@ -78,7 +96,7 @@ func getGeoFromRedis(client *redis.ClusterClient, ctx context.Context, ip string
 }
 
 func setGeoToRedis(client *redis.ClusterClient, ctx context.Context, ip string, geodata GeoData) (string, error) {
-	geoIp := "geo:" + ip
+	geoIp := fmt.Sprintf("geo:{%s}", ip)
 	geoJson, err := json.Marshal(geodata)
 	if err != nil {
 		return "MARSHAL_ISSUE", err
@@ -115,57 +133,77 @@ func getFraudFromRedis(client *redis.ClusterClient, ctx context.Context, ip stri
 	return fraud, "HIT", nil
 }
 
-func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip string, amount float64) (*FraudSignals, error) {
-	fraudKey := "fraud:" + ip
+func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip string, amount float64, transactionid string) (*FraudSignals, bool, error) {
+	fraudKey := fmt.Sprintf("fraud:{%s}", ip)
+	dedupKey := fmt.Sprintf("dedup:{%s}", ip)
+
 	now := time.Now().Unix()
-	data, err := updateFraud.Run(ctx, client, []string{fraudKey}, amount, now).Result()
+	ttl := 7200
+
+	data, err := updateFraud.Run(ctx, client, []string{fraudKey, dedupKey}, amount, now, transactionid, ttl).Result()
 	if err != nil {
-		return nil, fmt.Errorf("Lua script failed with %w", err)
+		return nil, false, fmt.Errorf("Lua script failed with %w", err)
 	}
 
-	var fraudData struct {
-		FirstSeen int64 `json:"first_seen"`
-		LastSeen int64 `json:"last_seen"`
-		TxnCount int `json:"txn_count"`
-		TotalAmount float64 `json:"total_amount"`
-		AmountVelocity float64 `json:"amount_velocity"`
-		AvgAmount float64 `json:"avg_amount"`
-		MaxAmount float64 `json:"max_amount"`
+	var response struct {
+		Data      FraudSignals `json:"data"`
+		Duplicate bool `json:"duplicate"`
 	}
 
-	err = json.Unmarshal([]byte(data.(string)), &fraudData)
+	// var fraudData struct {
+	// 	FirstSeen int64 `json:"first_seen"`
+	// 	LastSeen int64 `json:"last_seen"`
+	// 	TxnCount int `json:"txn_count"`
+	// 	TotalAmount float64 `json:"total_amount"`
+	// 	AmountVelocity float64 `json:"amount_velocity"`
+	// 	AvgAmount float64 `json:"avg_amount"`
+	// 	MaxAmount float64 `json:"max_amount"`
+	// }
+
+	err = json.Unmarshal([]byte(data.(string)), &response)
 	if err != nil {
-		return nil, fmt.Errorf("Some issue with Unmarshalling the JSON: %w", err)
+		return nil, false, fmt.Errorf("Some issue with Unmarshalling the JSON: %w", err)
 	}
 
-	fraud := &FraudSignals{
-			FirstSeen: time.Unix(fraudData.FirstSeen, 0),
-			LastSeen: time.Unix(fraudData.LastSeen, 0),
-			TxnCount: fraudData.TxnCount,
-			TotalAmount: fraudData.TotalAmount,
-			AmountVelocity: fraudData.AmountVelocity,
-			AvgAmount: fraudData.AvgAmount,
-			MaxAmount: fraudData.MaxAmount,
-		}
+	// fraud := &FraudSignals{
+	// 		FirstSeen: time.Unix(fraudData.FirstSeen, 0),
+	// 		LastSeen: time.Unix(fraudData.LastSeen, 0),
+	// 		TxnCount: fraudData.TxnCount,
+	// 		TotalAmount: fraudData.TotalAmount,
+	// 		AmountVelocity: fraudData.AmountVelocity,
+	// 		AvgAmount: fraudData.AvgAmount,
+	// 		MaxAmount: fraudData.MaxAmount,
+	// 	}
 
-	if fraudData.TxnCount == 1 {
+	if response.Duplicate {
+		log.Printf("DUPLICATE: txn=%s ip=%s (skipped)", transactionid, ip)
+	} else if response.Data.TxnCount == 1 {
 		log.Printf("NEW IP in fraud tracking: %s (Amount: $%.2f)", ip, amount)
 	} else {
 		log.Printf("UPDATED fraud data: IP=%s | Count=%d | Total=$%.2f | Velocity=$%.2f/h",
-			ip, fraud.TxnCount, fraud.TotalAmount, fraud.AmountVelocity)
+			ip, response.Data.TxnCount, response.Data.TotalAmount, response.Data.AmountVelocity)
 	}
 
-	return fraud, nil
+	return &response.Data, response.Duplicate, nil
 }
 
 
 func initialize_redis() (*redis.ClusterClient, context.Context) {
-	client := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{
+	redisAddr := os.Getenv("REDIS_CLUSTER_ADDR")
+	var addrs []string
+	if redisAddr == "" {
+		addrs = []string{
 			"192.168.240.100:6379",
 			"192.168.240.101:6379",
 			"192.168.240.102:6379",
-		},
+		}
+		log.Println("Using default docker IPs...")
+	} else {
+		addrs = strings.Split(redisAddr, ",")
+		log.Println("Using Redis cluster IPs...")
+	}
+	client := redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs: addrs,
 		RouteByLatency: true,
 	})
 

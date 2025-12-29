@@ -75,12 +75,18 @@ go mod tidy
 
 ## CHANGES
 - Changing BankingAgent with a Pre-generated set of domestic locations which can be reused and to get cache hit in redis
+- Modifying the python producer to give transaction id to have Idempotency checks
+- In enricher.go, when there is no new messages, instead of skipping, we can check whether there are some entries which are yet to be committed and which has already got past the commit interval limit
 
 ## Design Choices (Consolidate later into a document)
 1. Redsync vs Lua Scripts for Redis concurrency
   - RedSync is good for long running tasks outside Redis like api calls to 3rd party, DB updates etc. But latency is high and complexity is also high like handling retires, timeouts etc.
   - Lua Scripts is good for fast data processing tasks inside Redis like Read count, increment etc. Latency is low and atomic by default
   - Need to fix the issue in FraudProfile struct - here is where the counter is used and in case of GeoIP struct we don't use a counter, and a overwrite is fine.
+2. Why Redis + TTL for Dedup over its alternatives ? - traffic is less, so this is better. More traffic: 
+    - Bloom filter in Redis (last 15 min)
+    - Cassandra (last 24 hours)
+    - S3/cold storage (audit trail)
 
 ## REFERENCES
 [1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]

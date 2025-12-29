@@ -1,6 +1,5 @@
 package main
 
-import "time"
 
 type GeoData struct {
 	City        string  `json:"city"`
@@ -14,8 +13,8 @@ type GeoData struct {
 }
 
 type FraudSignals struct {
-	FirstSeen      time.Time `json:"first_seen"`
-	LastSeen       time.Time `json:"last_seen"`
+	FirstSeen      int64 `json:"first_seen"`
+	LastSeen       int64 `json:"last_seen"`
 	TxnCount       int       `json:"txn_count"`
 	TotalAmount    float64   `json:"total_amount"`
 	AmountVelocity float64   `json:"amount_velocity"`

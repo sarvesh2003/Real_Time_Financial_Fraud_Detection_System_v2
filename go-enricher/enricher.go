@@ -55,9 +55,11 @@ func main() {
 	defer p.Close()
 	
 	// Process message
-	MIN_COMMIT_COUNT := 20
-	msg_count := 0
+	const MIN_COMMIT_COUNT = 20
 	run := true
+	const COMMIT_INTERVAL = 5 * time.Second
+	var successCount int
+	var lastCommitTime = time.Now()
 
 	// Handle Ctrl+C
 	sigchan := make(chan os.Signal, 1)
@@ -80,22 +82,35 @@ func main() {
 
 			case sig := <-sigchan:
 			fmt.Printf("Caught signal %v: terminating\n", sig)
+			if successCount > 0 {
+				_, err := consumer.Commit()
+				if err != nil {
+					log.Printf("Final commit failed: %v", err)
+				} else {
+					log.Printf("Final commit successful (%d messages)", successCount)
+				}
+			}
 			run = false
 
 			default:
 				ev := consumer.Poll(100)
 				
 				if ev == nil {
+					if successCount > 0 && time.Since(lastCommitTime) > COMMIT_INTERVAL {
+						_, err := consumer.Commit()
+						if err != nil {
+							log.Printf("time-based commit failed: %v", err)
+						} else {
+							log.Printf("time-based commit: %d messages", successCount)
+							successCount = 0
+							lastCommitTime = time.Now()
+						}
+					}
 					continue
 				}
 
 				switch e := ev.(type) {
 				case *kafka.Message:
-					msg_count += 1
-					if msg_count % MIN_COMMIT_COUNT == 0 {
-						consumer.Commit()
-					}
-
 					var txn pb.TransactionRequest
 					err := proto.Unmarshal(e.Value, &txn)
 					if err != nil {
@@ -146,9 +161,24 @@ func main() {
 						}
 						
 						// FRAUD METRICS ENRICHMENT
-						fraudData, err := updateFraudInRedis(client, ctx, txn.IpAddress, float64(txn.Amount))
+						fraudData, isDuplicate, err := updateFraudInRedis(client, ctx, txn.IpAddress, float64(txn.Amount), txn.TransactionId)
 						if err != nil {
 							log.Printf("Fraud update failed for IP %s: %v", txn.IpAddress, err)
+							continue
+						}
+
+						if isDuplicate {
+							successCount++
+							if successCount >= MIN_COMMIT_COUNT {
+								_, err := consumer.Commit()
+								if err != nil {
+									log.Printf("Batch commit failed: %v", err)
+								} else {
+									log.Printf("Batch commit: %d messages", successCount)
+									successCount = 0
+									lastCommitTime = time.Now()
+								}
+							}
 							continue
 						}
 
@@ -229,8 +259,20 @@ func main() {
 
 						if err != nil {
 							log.Printf("Kafka publish by Enricher failed: %v", err)
-						} else {
-							log.Printf("Published Enriched transaction to %s", toKafkaTopic)
+							continue
+						}
+						
+						log.Printf("Published Enriched transaction to %s", toKafkaTopic)
+						successCount++
+						if successCount >= MIN_COMMIT_COUNT {
+							_, err := consumer.Commit()
+							if err != nil {
+								log.Printf("Batch commit failed: %v", err)
+							} else {
+								log.Printf("Batch commit: %d messages", successCount)
+								successCount = 0
+								lastCommitTime = time.Now()
+							}
 						}
 
 					}
