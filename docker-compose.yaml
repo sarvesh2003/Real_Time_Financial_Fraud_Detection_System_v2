@@ -39,8 +39,12 @@ services:
       - "50051:50051"
     environment:
       - KAFKA_BROKER=kafka:29092
+      - REDIS_CLUSTER_ADDRS=192.168.240.100:6379,192.168.240.101:6379,192.168.240.102:6379
     depends_on:
-      - kafka
+      kafka:
+        condition: service_started
+      redis-cluster-setup:
+        condition: service_completed_successfully
     networks:
       - redis-cluster-net
 

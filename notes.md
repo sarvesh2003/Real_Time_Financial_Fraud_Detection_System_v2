@@ -78,6 +78,9 @@ go mod tidy
 - Modifying the python producer to give transaction id to have Idempotency checks
 - In enricher.go, when there is no new messages, instead of skipping, we can check whether there are some entries which are yet to be committed and which has already got past the commit interval limit
 
+## DOUBTS
+- Are we ensuring that userId and dedup keys are stored in same node of the cluster ?
+
 ## Design Choices (Consolidate later into a document)
 1. Redsync vs Lua Scripts for Redis concurrency
   - RedSync is good for long running tasks outside Redis like api calls to 3rd party, DB updates etc. But latency is high and complexity is also high like handling retires, timeouts etc.
@@ -87,6 +90,10 @@ go mod tidy
     - Bloom filter in Redis (last 15 min)
     - Cassandra (last 24 hours)
     - S3/cold storage (audit trail)
+3. Why just userId level rate-limiting ? why not IP level ratelimiting ?
+  - Most of the txns are associated with some users and we assume that these txns are from a mobile device
+  - Secondly, if we don't have any userId in the request, we drop it
+  - We can let the WAF or Load balancer handle this IP level ratelimiting at edge
 
 ## REFERENCES
 [1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]
@@ -96,3 +103,4 @@ go mod tidy
 [5] https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar [Sidecar pattern]
 [6] https://medium.com/@nikhi.unni/redis-locking-with-lua-scripts-solving-race-conditions-in-threaded-applications-2e7c789dc235 [Race conditions in Go and how to handle them]
 [7] https://hackernoon.com/fixing-race-conditions-in-go-with-redis-based-distributed-locks [Redis-Go Concurrency example]
+[8] https://dev.to/leapcell/build-a-token-bucket-limiter-in-go-in-under-100-lines-4f61 [Go Token Bucket Algo]
