@@ -1,0 +1,158 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - redis-cluster-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - redis-cluster-net
+
+  go-server:
+    image: sarvesh3006/fraud-detection-server:latest
+    ports:
+      - "50051:50051"
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - REDIS_CLUSTER_ADDRS=192.168.240.100:6379,192.168.240.101:6379,192.168.240.102:6379
+    depends_on:
+      kafka:
+        condition: service_started
+      redis-cluster-setup:
+        condition: service_completed_successfully
+    networks:
+      - redis-cluster-net
+
+  python-producer:
+    image: sarvesh3006/fraud-detection-producer:latest
+    environment:
+      - GRPC_SERVER_ADDRESS=go-server:50051
+    depends_on:
+      - go-server
+    networks:
+      - redis-cluster-net
+  
+  go-enricher:
+    image: sarvesh3006/fraud-detection-enricher:latest
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - KAFKA_CONSUMER_TOPICS_ENRICHER=raw_transactions
+      - REDIS_CLUSTER_ADDRS=192.168.240.100:6379,192.168.240.101:6379,192.168.240.102:6379
+    depends_on:
+      kafka:
+        condition: service_started
+      redis-cluster-setup:
+        condition: service_completed_successfully
+      geoip-updater:
+        condition: service_started
+    networks:
+      - redis-cluster-net
+    volumes:
+      - geoip-data:/data/geoip:ro
+    restart: on-failure
+
+  redis1:
+    image: redis:latest
+    command: >
+      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      --cluster-node-timeout 5000 --appendonly yes --port 6379
+      --bind 0.0.0.0 --protected-mode no
+    ports:
+      - "7001:6379"
+      - "17001:16379"
+    networks:
+      redis-cluster-net:
+        ipv4_address: 192.168.240.100
+    restart: always
+
+  redis2:
+    image: redis:latest
+    command: >
+      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      --cluster-node-timeout 5000 --appendonly yes --port 6379
+      --bind 0.0.0.0 --protected-mode no
+    ports:
+      - "7002:6379"
+      - "17002:16379"
+    networks:
+      redis-cluster-net:
+        ipv4_address: 192.168.240.101
+    restart: always
+
+  redis3:
+    image: redis:latest
+    command: >
+      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      --cluster-node-timeout 5000 --appendonly yes --port 6379
+      --bind 0.0.0.0 --protected-mode no
+    ports:
+      - "7003:6379"
+      - "17003:16379"
+    networks:
+      redis-cluster-net:
+        ipv4_address: 192.168.240.102
+    restart: always
+
+  redis-cluster-setup:
+    image: redis:latest
+    depends_on:
+      - redis1
+      - redis2
+      - redis3
+    entrypoint: >
+      sh -c "
+      sleep 30 &&
+      echo yes | redis-cli --cluster create
+      192.168.240.100:6379 192.168.240.101:6379 192.168.240.102:6379
+      --cluster-replicas 0
+      "
+    networks:
+      redis-cluster-net:
+        ipv4_address: 192.168.240.103
+
+  geoip-updater:
+    image: maxmindinc/geoipupdate
+    environment:
+      - GEOIPUPDATE_ACCOUNT_ID=${GEOIPUPDATE_ACCOUNT_ID}
+      - GEOIPUPDATE_LICENSE_KEY=${GEOIPUPDATE_LICENSE_KEY}
+      - GEOIPUPDATE_EDITION_IDS=${GEOIPUPDATE_EDITION_IDS}
+      - GEOIPUPDATE_FREQUENCY=${GEOIPUPDATE_FREQUENCY}
+    volumes:
+      - geoip-data:/usr/share/GeoIP
+    restart: unless-stopped
+
+networks:
+  redis-cluster-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
+    ipam:
+      config:
+        - subnet: 192.168.240.0/24
+          gateway: 192.168.240.1
+
+volumes:
+  geoip-data:

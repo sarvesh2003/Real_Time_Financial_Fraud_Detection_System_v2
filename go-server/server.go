@@ -79,8 +79,8 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 	// No Dedup key is present, so do the processing
 	rateLimitUser := fmt.Sprintf("rate_limit_user:{%s}", req.UserId)
 	// rateLimitIp := fmt.Sprintf("rate_limit_ip:{%s}", req.IpAddress)
-	burst_limit := 1
-	rate_limit := 1
+	burst_limit := 1000
+	rate_limit := 500
 
 	allowed, err := tokenBucketRateLimiting.Run(ctx, s.redisClient, []string{rateLimitUser}, burst_limit, rate_limit, time.Now().Unix(), 60).Int()
 
@@ -89,6 +89,7 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 		log.Printf("WARNING: Redis Rate Limit failed: %v", err)
 		return nil, status.Errorf(codes.Internal, "Rate Limit Check Failed")
 	} else if allowed == 0 {
+		s.redisClient.Del(ctx, dedupKey)
 		log.Printf("Rate Limit Exceeded for userId: %s", req.UserId)
 		return nil, status.Errorf(codes.ResourceExhausted, "Rate Limit Exceeded")
 	}

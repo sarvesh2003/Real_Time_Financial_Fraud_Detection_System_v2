@@ -94,6 +94,8 @@ go mod tidy
   - Most of the txns are associated with some users and we assume that these txns are from a mobile device
   - Secondly, if we don't have any userId in the request, we drop it
   - We can let the WAF or Load balancer handle this IP level ratelimiting at edge
+4. Changing the flow of server.go's redis flow because it might result in race conditions
+  - If there are 2 instances and when instance 2 executes between SISMEMBER and SADD, 
 
 ## REFERENCES
 [1] https://medium.com/@aasefeh/setting-up-a-redis-cluster-in-a-go-application-using-docker-compose-0e8044dfb6d1 [DOCKER-REDIS-GO CONNECTION]

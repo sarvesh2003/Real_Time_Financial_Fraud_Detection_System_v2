@@ -15,4 +15,4 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
-notes.md
+load-tests/results_*
