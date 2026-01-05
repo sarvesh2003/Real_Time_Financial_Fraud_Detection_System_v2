@@ -2,7 +2,12 @@ FROM python:3.10-slim
 WORKDIR /app
 
 COPY python-producer/requirements.txt .
-RUN pip install -r requirements.txt
+
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements.txt
+# RUN pip install -r requirements.txt
 
 COPY python-producer/producer.py .
 COPY python-producer/transaction-generator-models/model_gaussian_20L.pkl .

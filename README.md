@@ -4,6 +4,9 @@ A redesigned fraud detection platform featuring synthetic data generation and cr
 
 > **Active Development**: Core ingestion pipeline is complete. Enrichment, streaming inference, and MLOps components are being migrated from [Version 1](https://github.com/sarvesh2003/Fraud-Detection-System).
 
+> **Fully Containerized**: Pre-built Docker images available for instant deployment
+
+
 ## What's New in V2
 
 | Feature | V1 | V2 |
@@ -79,6 +82,16 @@ message TransactionRequest {
 ### Prerequisites
 - Docker & Docker Compose
 - (Optional) Go 1.19+ and Python 3.9+ for local development
+
+## 📦 Docker Images
+
+Pre-built images available on Docker Hub:
+```bash
+docker pull sarvesh3006/fraud-detection-server:latest     # ~50MB
+docker pull sarvesh3006/fraud-detection-producer:latest   # ~400MB
+docker pull sarvesh3006/fraud-detection-enricher:latest   # ~50MB
+```
+
 
 ### Quick Start
 ```bash

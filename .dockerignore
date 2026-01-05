@@ -1,0 +1,35 @@
+# Ignore everything by default
+**
+
+# Allow Python producer files
+!python-producer/requirements.txt
+!python-producer/producer.py
+!python-producer/transaction-generator-models/model_gaussian_20L.pkl
+!python-producer/transaction-generator-models/userIds_10k.csv
+
+# Allow Go enricher files
+!go-enricher/*.go
+!go-enricher/go.mod
+!go-enricher/go.sum
+
+# Allow Go server files
+!go-server/*.go
+!go-server/go.mod
+!go-server/go.sum
+
+# Allow proto files
+!pb/proto/fraud/v1/*.go
+!proto/fraud/v1/*.py
+
+# Explicitly block these
+.git/
+.gitignore
+.env
+.vscode/
+.idea/
+*.log
+__pycache__/
+*.pyc
+venv/
+env/
+node_modules/
