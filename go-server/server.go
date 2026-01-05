@@ -66,12 +66,14 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 
 	// Dedup key check
 	dedupKey := fmt.Sprintf("dedup:{%s}", req.TransactionId)
-	isDuplicate, err := s.redisClient.SIsMember(ctx, dedupKey, req.TransactionId).Result()
+	isNew, err := s.redisClient.SetNX(ctx, dedupKey, "1", 10*time.Minute).Result()
 	if err != nil {
 		log.Printf("WARNING: Some issue with Redis Dedup check: {%s}", err)
+		return nil, status.Errorf(codes.Internal, "Internal Server Error")
 	}
-	if isDuplicate {
-		log.Printf("Transaction already present, so Skipping...")
+	if !isNew {
+		log.Printf("Transaction already present, so Skipping for: %s", req.TransactionId)
+		return &pb.IngestionResponse{Success: true, Message: "Already processed (Idempotent)"}, nil
 	}
 
 	// No Dedup key is present, so do the processing
@@ -83,7 +85,9 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 	allowed, err := tokenBucketRateLimiting.Run(ctx, s.redisClient, []string{rateLimitUser}, burst_limit, rate_limit, time.Now().Unix(), 60).Int()
 
 	if err != nil {
+		s.redisClient.Del(ctx, dedupKey)
 		log.Printf("WARNING: Redis Rate Limit failed: %v", err)
+		return nil, status.Errorf(codes.Internal, "Rate Limit Check Failed")
 	} else if allowed == 0 {
 		log.Printf("Rate Limit Exceeded for userId: %s", req.UserId)
 		return nil, status.Errorf(codes.ResourceExhausted, "Rate Limit Exceeded")
@@ -106,7 +110,7 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 	}
 
 	// Marking as processed
-	s.redisClient.SAdd(ctx, dedupKey, req.TransactionId)
+	// s.redisClient.SAdd(ctx, dedupKey, req.TransactionId)
 	s.redisClient.Expire(ctx, dedupKey, 10*time.Minute)
 
 	fmt.Printf("Received & Pushed: User=%d | Amt=%.2f\n", req.UserId, req.Amount)

@@ -2,7 +2,7 @@
 
 A redesigned fraud detection platform featuring synthetic data generation and cross-language microservice architecture. This version introduces statistically realistic transaction simulation using SDV (Gaussian Copula) and Python ↔ Go communication via gRPC.
 
-> **Active Development**: Core ingestion pipeline is complete. Enrichment, streaming inference, and MLOps components are being migrated from [Version 1](link-to-v1).
+> **Active Development**: Core ingestion pipeline is complete. Enrichment, streaming inference, and MLOps components are being migrated from [Version 1](https://github.com/sarvesh2003/Fraud-Detection-System).
 
 ## What's New in V2
 
