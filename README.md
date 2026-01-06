@@ -29,6 +29,8 @@ Go Enrichment Service (GeoIP + Fraud Metrics)
     ↓ Kafka
 Enriched Transaction Stream
 ```
+<img width="683" height="433" alt="image" src="https://github.com/user-attachments/assets/55c096e4-add8-47b4-ab2a-2d8e0149e228" />
+
 
 ### Data Flow
 
