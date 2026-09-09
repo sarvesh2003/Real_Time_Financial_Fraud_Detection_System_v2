@@ -37,9 +37,10 @@ services:
       dockerfile: go-server/Dockerfile
     ports:
       - "50051:50051"
+      - "9100:9100"
     environment:
       - KAFKA_BROKER=kafka:29092
-      - REDIS_CLUSTER_ADDRS=192.168.240.100:6379,192.168.240.101:6379,192.168.240.102:6379
+      - REDIS_CLUSTER_ADDRS=192.168.241.100:6379,192.168.241.101:6379,192.168.241.102:6379
     depends_on:
       kafka:
         condition: service_started
@@ -66,7 +67,9 @@ services:
     environment:
       - KAFKA_BROKER=kafka:29092
       - KAFKA_CONSUMER_TOPICS_ENRICHER=raw_transactions
-      - REDIS_CLUSTER_ADDRS=192.168.240.100:6379,192.168.240.101:6379,192.168.240.102:6379
+      - REDIS_CLUSTER_ADDRS=192.168.241.100:6379,192.168.241.101:6379,192.168.241.102:6379
+    ports:
+      - "9101:9101"
     depends_on:
       kafka:
         condition: service_started
@@ -87,11 +90,11 @@ services:
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
-      - "7001:6379"
-      - "17001:16379"
+      - "7011:6379"
+      - "17011:16379"
     networks:
       redis-cluster-net:
-        ipv4_address: 192.168.240.100
+        ipv4_address: 192.168.241.100
     restart: always
 
   redis2:
@@ -101,11 +104,11 @@ services:
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
-      - "7002:6379"
-      - "17002:16379"
+      - "7012:6379"
+      - "17012:16379"
     networks:
       redis-cluster-net:
-        ipv4_address: 192.168.240.101
+        ipv4_address: 192.168.241.101
     restart: always
 
   redis3:
@@ -115,11 +118,11 @@ services:
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
-      - "7003:6379"
-      - "17003:16379"
+      - "7013:6379"
+      - "17013:16379"
     networks:
       redis-cluster-net:
-        ipv4_address: 192.168.240.102
+        ipv4_address: 192.168.241.102
     restart: always
 
   redis-cluster-setup:
@@ -132,12 +135,47 @@ services:
       sh -c "
       sleep 30 &&
       echo yes | redis-cli --cluster create
-      192.168.240.100:6379 192.168.240.101:6379 192.168.240.102:6379
+      192.168.241.100:6379 192.168.241.101:6379 192.168.241.102:6379
       --cluster-replicas 0
       "
     networks:
       redis-cluster-net:
-        ipv4_address: 192.168.240.103
+        ipv4_address: 192.168.241.103
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - redis-cluster-net
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    command:
+      - "--redis.addr=redis://redis1:6379"
+      - "--is-cluster"
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis-cluster-setup:
+        condition: service_completed_successfully
+    networks:
+      - redis-cluster-net
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    command:
+      - "--kafka.server=kafka:29092"
+    ports:
+      - "9308:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - redis-cluster-net
 
   geoip-updater:
     image: maxmindinc/geoipupdate
@@ -157,8 +195,8 @@ networks:
       com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
     ipam:
       config:
-        - subnet: 192.168.240.0/24
-          gateway: 192.168.240.1
+        - subnet: 192.168.241.0/24
+          gateway: 192.168.241.1
 
 volumes:
   geoip-data:

@@ -63,12 +63,18 @@ var tokenBucketRateLimiting = redis.NewScript(`
 `)
 
 func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest) (*pb.IngestionResponse, error) {
+	start := time.Now()
+	transactionsTotal.Inc()
+	defer func() {
+		transactionDuration.Observe(time.Since(start).Seconds())
+	}()
 
 	// Dedup key check
 	dedupKey := fmt.Sprintf("dedup:{%s}", req.TransactionId)
 	isNew, err := s.redisClient.SetNX(ctx, dedupKey, "1", 10*time.Minute).Result()
 	if err != nil {
 		log.Printf("WARNING: Some issue with Redis Dedup check: {%s}", err)
+		transactionErrorsTotal.WithLabelValues("redis_dedup").Inc()
 		return nil, status.Errorf(codes.Internal, "Internal Server Error")
 	}
 	if !isNew {
@@ -87,16 +93,19 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 	if err != nil {
 		s.redisClient.Del(ctx, dedupKey)
 		log.Printf("WARNING: Redis Rate Limit failed: %v", err)
+		transactionErrorsTotal.WithLabelValues("rate_limit_error").Inc()
 		return nil, status.Errorf(codes.Internal, "Rate Limit Check Failed")
 	} else if allowed == 0 {
 		s.redisClient.Del(ctx, dedupKey)
 		log.Printf("Rate Limit Exceeded for userId: %s", req.UserId)
+		transactionErrorsTotal.WithLabelValues("rate_limit_exceeded").Inc()
 		return nil, status.Errorf(codes.ResourceExhausted, "Rate Limit Exceeded")
 	}
 
 	// Pushing to Kafka
 	bytes, err := proto.Marshal(req)
 	if err != nil {
+		transactionErrorsTotal.WithLabelValues("serialization").Inc()
 		return &pb.IngestionResponse{Success: false, Message: "Serialization failed"}, err
 	}
 
@@ -107,6 +116,7 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 
 	if err != nil {
 		fmt.Printf("Kafka Error: %v\n", err)
+		transactionErrorsTotal.WithLabelValues("kafka_produce").Inc()
 		return &pb.IngestionResponse{Success: false, Message: "Kafka push failed"}, nil
 	}
 
@@ -134,7 +144,10 @@ func main() {
 	// REDIS CLUSTER SETUP
 	client, _ := initialize_redis()
 
-	
+	// METRICS SERVER
+	startMetricsServer()
+
+
 	// Starting TCP Listener
 	lis, err := net.Listen("tcp", port)
 	if err != nil {

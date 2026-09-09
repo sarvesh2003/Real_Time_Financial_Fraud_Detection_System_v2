@@ -20,6 +20,7 @@ COPY go-enricher/models.go .
 COPY go-enricher/redis_functions.go .
 COPY go-enricher/maxmind_functions.go .
 COPY go-enricher/utils.go .
+COPY go-enricher/metrics.go .
 
 RUN go get google.golang.org/grpc
 RUN go get google.golang.org/protobuf

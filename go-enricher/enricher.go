@@ -69,6 +69,9 @@ func main() {
 	client, ctx := initialize_redis()
 	time.Sleep(10 * time.Second)
 
+	// METRICS SERVER
+	startMetricsServer()
+
 	// Initializing MaxMindDB
 	cityDb, asnDB, cleanUpDB, err := initialize_maxmindDB()
 	if err != nil {
@@ -111,11 +114,14 @@ func main() {
 
 				switch e := ev.(type) {
 				case *kafka.Message:
+					msgStart := time.Now()
 					var txn pb.TransactionRequest
 					err := proto.Unmarshal(e.Value, &txn)
 					if err != nil {
 						fmt.Println("Failed to Unmarshal")
 						// Push to DLQ (to do later)
+						enricherErrorsTotal.WithLabelValues("unmarshal").Inc()
+						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 						continue;
 					}
 					log.Printf("Transaction values: IP Address=%s, Txn Id=%s, UserId=%d, Amount=%.2f", txn.IpAddress, txn.TransactionId, txn.UserId, txn.Amount)
@@ -130,6 +136,8 @@ func main() {
 						data, status, err := getGeoFromRedis(client, ctx, txn.IpAddress)
 						if err != nil {
 							fmt.Println("WARNING: SOMETHING IS WRONG WITH THE GET GEO FUNCTION...")
+							enricherErrorsTotal.WithLabelValues("geo_lookup").Inc()
+							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 							continue
 						} else {
 							if status == "MISS" {
@@ -164,6 +172,8 @@ func main() {
 						fraudData, isDuplicate, err := updateFraudInRedis(client, ctx, txn.IpAddress, float64(txn.Amount), txn.TransactionId)
 						if err != nil {
 							log.Printf("Fraud update failed for IP %s: %v", txn.IpAddress, err)
+							enricherErrorsTotal.WithLabelValues("fraud_update").Inc()
+							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 							continue
 						}
 
@@ -179,6 +189,7 @@ func main() {
 									lastCommitTime = time.Now()
 								}
 							}
+							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 							continue
 						}
 
@@ -246,6 +257,8 @@ func main() {
 						enrichedJSON, err := json.Marshal(enrichedTxn)
 						if err != nil {
 							log.Printf("JSON marshal failed: %v", err)
+							enricherErrorsTotal.WithLabelValues("json_marshal").Inc()
+							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 							continue
 						}
 
@@ -259,10 +272,14 @@ func main() {
 
 						if err != nil {
 							log.Printf("Kafka publish by Enricher failed: %v", err)
+							enricherErrorsTotal.WithLabelValues("kafka_produce").Inc()
+							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 							continue
 						}
-						
+
 						log.Printf("Published Enriched transaction to %s", toKafkaTopic)
+						messagesProcessedTotal.Inc()
+						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 						successCount++
 						if successCount >= MIN_COMMIT_COUNT {
 							_, err := consumer.Commit()
@@ -279,6 +296,8 @@ func main() {
 
 					} else {
 						// Push to DLQ
+						enricherErrorsTotal.WithLabelValues("invalid_ip").Inc()
+						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
 					}
 
 

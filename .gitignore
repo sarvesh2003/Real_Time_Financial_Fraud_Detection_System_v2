@@ -16,3 +16,6 @@ docker-compose.override.yml
 Thumbs.db
 
 load-tests/results_*
+
+personal-notes/
+Project_Upgrade.md

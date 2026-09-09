@@ -5,7 +5,8 @@ COPY python-producer/requirements.txt .
 
 RUN pip install --no-cache-dir \
     torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cpu
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple
 RUN pip install --no-cache-dir -r requirements.txt
 # RUN pip install -r requirements.txt
 

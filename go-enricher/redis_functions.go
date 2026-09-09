@@ -189,7 +189,7 @@ func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip str
 
 
 func initialize_redis() (*redis.ClusterClient, context.Context) {
-	redisAddr := os.Getenv("REDIS_CLUSTER_ADDR")
+	redisAddr := os.Getenv("REDIS_CLUSTER_ADDRS")
 	var addrs []string
 	if redisAddr == "" {
 		addrs = []string{
