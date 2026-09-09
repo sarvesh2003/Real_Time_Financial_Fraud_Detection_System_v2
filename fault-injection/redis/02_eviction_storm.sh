@@ -16,6 +16,9 @@ inject() {
     redis_cli "$TARGET" CONFIG SET maxmemory-policy allkeys-lru
 
     echo "Flooding $TARGET with $FLOOD_KEYS keys to force eviction..."
+    # --cluster makes redis-benchmark cluster-aware, so it distributes these
+    # writes across all 3 nodes by hash slot, not just $TARGET - restore()
+    # has to clean up all 3 nodes to match.
     compose exec -T "$TARGET" redis-benchmark --cluster -q -t set -n "$FLOOD_KEYS" -d 200 -r 1000000000
 
     echo "Done. Check redis_evicted_keys_total in Prometheus."
@@ -26,8 +29,10 @@ restore() {
     redis_cli "$TARGET" CONFIG SET maxmemory 0
     redis_cli "$TARGET" CONFIG SET maxmemory-policy noeviction
 
-    echo "Clearing fault-injected keys on $TARGET..."
-    redis_cli "$TARGET" FLUSHALL
+    echo "Clearing fault-injected keys on redis1, redis2, redis3 (the flood landed on all 3, not just $TARGET)..."
+    redis_cli redis1 FLUSHALL
+    redis_cli redis2 FLUSHALL
+    redis_cli redis3 FLUSHALL
 }
 
 case "${1:-}" in

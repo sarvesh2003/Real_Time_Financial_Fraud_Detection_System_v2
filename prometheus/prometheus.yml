@@ -19,5 +19,12 @@ scrape_configs:
       - targets: ['go-server:9100']
 
   - job_name: 'go-enricher'
-    static_configs:
-      - targets: ['go-enricher:9101']
+    # go-enricher can run as multiple replicas sharing one DNS name.
+    # static_configs would only ever resolve to whichever single replica
+    # Docker's embedded DNS happens to hand back, silently hiding the
+    # others' counters. dns_sd_configs resolves every A record behind the
+    # name and scrapes each replica individually.
+    dns_sd_configs:
+      - names: ['go-enricher']
+        type: 'A'
+        port: 9101

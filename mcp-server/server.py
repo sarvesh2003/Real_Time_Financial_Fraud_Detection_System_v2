@@ -24,6 +24,7 @@ CHANGELOG_FILE = REPO_ROOT / "fault-injection" / "changelog.jsonl"
 
 MAX_LOG_LINES = 500
 MAX_DATAPOINTS_PER_SERIES = 60
+MAX_SERIES = 25
 
 # Swappable base URL — pointing this at Grafana Cloud, Thanos, or any other
 # Prometheus-compatible endpoint later is a one-line config change, not a
@@ -62,6 +63,15 @@ def _run_compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
         ["docker", "compose", "-f", str(COMPOSE_FILE), *args],
         capture_output=True,
         text=True,
+        # Docker always writes container output as UTF-8, but `text=True`
+        # alone decodes with the host's default locale encoding (cp1252 on
+        # Windows) — a single non-cp1252 byte in a container's log output
+        # (e.g. from geoip-updater's MaxMind data) then throws mid-decode in
+        # subprocess's background reader thread, silently leaving `.stdout`
+        # as None. Force real UTF-8 and tolerate undecodable bytes instead
+        # of crashing on them.
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         # Explicitly closed: when this server itself runs as a subprocess of
         # an MCP client (the normal case), the child `docker` process can
@@ -159,6 +169,15 @@ def get_metrics(promql: str, window: str) -> str:
     if not results:
         return "(no time series matched this query in the given window)"
 
+    # An unscoped or broad query (e.g. discovering what metrics exist) can
+    # match hundreds of series - each with up to MAX_DATAPOINTS_PER_SERIES
+    # points, that adds up to multi-megabyte responses that MCP clients may
+    # silently truncate or reject. Cap the series count too, not just points
+    # per series, and say so clearly rather than returning a wall of data an
+    # agent might mistake for the complete picture.
+    truncated = len(results) > MAX_SERIES
+    results = results[:MAX_SERIES]
+
     lines = []
     for series in results:
         labels = series.get("metric", {})
@@ -167,7 +186,10 @@ def get_metrics(promql: str, window: str) -> str:
         point_str = ", ".join(f"{ts:.0f}:{val}" for ts, val in points)
         lines.append(f"{label_str} -> {point_str}")
 
-    return "\n".join(lines)
+    output = "\n".join(lines)
+    if truncated:
+        output = f"[showing first {MAX_SERIES} of {len(payload['data']['result'])} matching series - narrow the query (e.g. add label matchers) for the rest]\n" + output
+    return output
 
 
 @mcp.tool()
@@ -232,14 +254,23 @@ def _read_redis_config(service: str) -> str:
 
 def _read_container_env_config(service: str) -> str:
     ps = _run_compose("ps", "-q", service)
-    container_id = ps.stdout.strip()
-    if not container_id:
+    # A scaled service (e.g. go-enricher with N replicas) returns one
+    # container ID per line. All replicas share identical env config (same
+    # image, same compose `environment:` block), so the first one is enough
+    # - but without splitting, all N IDs get jammed into a single malformed
+    # `docker inspect` argument and the call fails for every replica count
+    # other than 1.
+    container_ids = ps.stdout.strip().splitlines()
+    if not container_ids:
         return f"ERROR: no running container found for service '{service}'"
+    container_id = container_ids[0].strip()
 
     inspect = subprocess.run(
         ["docker", "inspect", "--format", "{{json .Config.Env}}", container_id],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=15,
         stdin=subprocess.DEVNULL,
     )
