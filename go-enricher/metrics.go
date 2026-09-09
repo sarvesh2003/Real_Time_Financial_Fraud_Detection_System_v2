@@ -21,6 +21,11 @@ var (
 		Help: "Total number of enrichment errors, by reason",
 	}, []string{"reason"})
 
+	duplicateMessagesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "fraud_enricher_duplicate_messages_total",
+		Help: "Total number of duplicate transactions skipped by the enricher",
+	})
+
 	enrichmentDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "fraud_enricher_message_duration_seconds",
 		Help:    "Time taken to process a single raw transaction message",

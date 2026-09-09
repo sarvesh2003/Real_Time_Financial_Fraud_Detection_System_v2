@@ -178,6 +178,7 @@ func main() {
 						}
 
 						if isDuplicate {
+							duplicateMessagesTotal.Inc()
 							successCount++
 							if successCount >= MIN_COMMIT_COUNT {
 								_, err := consumer.Commit()

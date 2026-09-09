@@ -111,6 +111,7 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 
 	err = s.producer.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &[]string{kafkaTopic}[0], Partition: kafka.PartitionAny},
+		Key:   []byte(req.UserId),
 		Value: bytes,
 	}, nil)
 

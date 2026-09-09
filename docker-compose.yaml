@@ -41,6 +41,13 @@ services:
     environment:
       - KAFKA_BROKER=kafka:29092
       - REDIS_CLUSTER_ADDRS=192.168.241.100:6379,192.168.241.101:6379,192.168.241.102:6379
+      - REDIS_DIAL_TIMEOUT_MS=${REDIS_DIAL_TIMEOUT_MS:-}
+      - REDIS_READ_TIMEOUT_MS=${REDIS_READ_TIMEOUT_MS:-}
+      - REDIS_WRITE_TIMEOUT_MS=${REDIS_WRITE_TIMEOUT_MS:-}
+      - REDIS_POOL_SIZE=${REDIS_POOL_SIZE:-}
+      - REDIS_MAX_RETRIES=${REDIS_MAX_RETRIES:-}
+      - REDIS_MIN_RETRY_BACKOFF_MS=${REDIS_MIN_RETRY_BACKOFF_MS:-}
+      - REDIS_MAX_RETRY_BACKOFF_MS=${REDIS_MAX_RETRY_BACKOFF_MS:-}
     depends_on:
       kafka:
         condition: service_started
@@ -68,8 +75,13 @@ services:
       - KAFKA_BROKER=kafka:29092
       - KAFKA_CONSUMER_TOPICS_ENRICHER=raw_transactions
       - REDIS_CLUSTER_ADDRS=192.168.241.100:6379,192.168.241.101:6379,192.168.241.102:6379
-    ports:
-      - "9101:9101"
+      - REDIS_DIAL_TIMEOUT_MS=${REDIS_DIAL_TIMEOUT_MS:-}
+      - REDIS_READ_TIMEOUT_MS=${REDIS_READ_TIMEOUT_MS:-}
+      - REDIS_WRITE_TIMEOUT_MS=${REDIS_WRITE_TIMEOUT_MS:-}
+      - REDIS_POOL_SIZE=${REDIS_POOL_SIZE:-}
+      - REDIS_MAX_RETRIES=${REDIS_MAX_RETRIES:-}
+      - REDIS_MIN_RETRY_BACKOFF_MS=${REDIS_MIN_RETRY_BACKOFF_MS:-}
+      - REDIS_MAX_RETRY_BACKOFF_MS=${REDIS_MAX_RETRY_BACKOFF_MS:-}
     depends_on:
       kafka:
         condition: service_started
@@ -86,7 +98,7 @@ services:
   redis1:
     image: redis:latest
     command: >
-      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      redis-server --cluster-enabled yes --enable-debug-command yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
@@ -100,7 +112,7 @@ services:
   redis2:
     image: redis:latest
     command: >
-      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      redis-server --cluster-enabled yes --enable-debug-command yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
@@ -114,7 +126,7 @@ services:
   redis3:
     image: redis:latest
     command: >
-      redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
+      redis-server --cluster-enabled yes --enable-debug-command yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
       --bind 0.0.0.0 --protected-mode no
     ports:
@@ -134,9 +146,11 @@ services:
     entrypoint: >
       sh -c "
       sleep 30 &&
-      echo yes | redis-cli --cluster create
-      192.168.241.100:6379 192.168.241.101:6379 192.168.241.102:6379
-      --cluster-replicas 0
+      if redis-cli -h 192.168.241.100 -p 6379 cluster info | grep -q 'cluster_state:ok'; then
+        echo 'Cluster already healthy, skipping creation.';
+      else
+        echo yes | redis-cli --cluster create 192.168.241.100:6379 192.168.241.101:6379 192.168.241.102:6379 --cluster-replicas 0;
+      fi
       "
     networks:
       redis-cluster-net:

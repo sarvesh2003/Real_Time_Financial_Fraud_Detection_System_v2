@@ -188,6 +188,35 @@ func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip str
 }
 
 
+// envMillis reads an env var as milliseconds and converts it to a Duration.
+// Returns 0 (unset) if the var is missing or invalid, which tells go-redis
+// to fall back to its own library default for that setting.
+func envMillis(key string) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0
+	}
+	return time.Duration(parsed) * time.Millisecond
+}
+
+// envInt reads an env var as a plain int. Returns 0 (unset) if missing or
+// invalid, which tells go-redis to fall back to its own library default.
+func envInt(key string) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
 func initialize_redis() (*redis.ClusterClient, context.Context) {
 	redisAddr := os.Getenv("REDIS_CLUSTER_ADDRS")
 	var addrs []string
@@ -203,8 +232,15 @@ func initialize_redis() (*redis.ClusterClient, context.Context) {
 		log.Println("Using Redis cluster IPs...")
 	}
 	client := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: addrs,
-		RouteByLatency: true,
+		Addrs:           addrs,
+		RouteByLatency:  true,
+		DialTimeout:     envMillis("REDIS_DIAL_TIMEOUT_MS"),
+		ReadTimeout:     envMillis("REDIS_READ_TIMEOUT_MS"),
+		WriteTimeout:    envMillis("REDIS_WRITE_TIMEOUT_MS"),
+		PoolSize:        envInt("REDIS_POOL_SIZE"),
+		MaxRetries:      envInt("REDIS_MAX_RETRIES"),
+		MinRetryBackoff: envMillis("REDIS_MIN_RETRY_BACKOFF_MS"),
+		MaxRetryBackoff: envMillis("REDIS_MAX_RETRY_BACKOFF_MS"),
 	})
 
 	ctx := context.Background()
