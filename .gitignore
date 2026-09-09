@@ -16,6 +16,7 @@ docker-compose.override.yml
 Thumbs.db
 
 load-tests/results_*
+fault-injection/changelog.jsonl
 
 personal-notes/
 Project_Upgrade.md

@@ -22,7 +22,7 @@ restore() {
 }
 
 case "${1:-}" in
-    inject) inject ;;
-    restore) restore ;;
+    inject) log_change inject; inject ;;
+    restore) log_change restore; restore ;;
     *) echo "Usage: $0 <inject|restore>  (optional: TARGET=go-server LOW_POOL_SIZE=2)"; exit 1 ;;
 esac

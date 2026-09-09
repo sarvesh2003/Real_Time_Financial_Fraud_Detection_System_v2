@@ -35,7 +35,7 @@ restore() {
 }
 
 case "${1:-}" in
-    inject) inject ;;
-    restore) restore ;;
+    inject) log_change inject; inject ;;
+    restore) log_change restore; restore ;;
     *) echo "Usage: $0 <inject|restore>  (optional: TARGET=redis1 LOW_MAXCLIENTS=5)"; exit 1 ;;
 esac
