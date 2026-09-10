@@ -15,7 +15,15 @@ redis_cli() {
 }
 
 container_id() {
-    compose ps -q "$1"
+    # A scaled service (e.g. go-enricher with N replicas) returns one
+    # container ID per line - passing all of them jammed together into a
+    # single downstream argument (docker update/run --net=container:) breaks.
+    # All replicas share the same image/netns setup, so the first one is a
+    # safe, unambiguous choice (same fix already applied for this exact bug
+    # shape in mcp-server/server.py). Note: this means a fault applied via
+    # this helper only affects that one replica, not all of them, if ever
+    # pointed at a scaled service - never happens with today's defaults.
+    compose ps -q "$1" | head -n1
 }
 
 # Change log for the MCP server's list_recent_changes tool. One JSON line

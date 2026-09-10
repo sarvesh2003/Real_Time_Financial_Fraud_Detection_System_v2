@@ -22,10 +22,22 @@ inject() {
 }
 
 restore() {
-    echo "Restoring maxmemory=0 and the CORRECT policy (allkeys-lru) on $TARGET..."
+    # Restore to noeviction, not allkeys-lru - noeviction is this stack's
+    # actual baseline (nothing in docker-compose.yaml ever sets a policy, see
+    # personal-notes/faults_and_descriptions.md), and leaving $TARGET on
+    # allkeys-lru afterward makes it permanently look like fault 2 (eviction
+    # storm) is still running to anything reading redis config later.
+    echo "Restoring maxmemory=0 and the baseline policy (noeviction) on $TARGET..."
     redis_cli "$TARGET" CONFIG SET maxmemory 0
-    redis_cli "$TARGET" CONFIG SET maxmemory-policy allkeys-lru
-    redis_cli "$TARGET" FLUSHALL
+    redis_cli "$TARGET" CONFIG SET maxmemory-policy noeviction
+
+    # The --cluster flood in inject() distributes writes across all 3 nodes
+    # by hash slot, not just $TARGET - flushing only $TARGET leaves residual
+    # keys on the other two (the same bug fault 2 had before being fixed).
+    echo "Clearing fault-injected keys on redis1, redis2, redis3..."
+    redis_cli redis1 FLUSHALL
+    redis_cli redis2 FLUSHALL
+    redis_cli redis3 FLUSHALL
 }
 
 case "${1:-}" in

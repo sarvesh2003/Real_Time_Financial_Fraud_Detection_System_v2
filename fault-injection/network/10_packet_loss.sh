@@ -20,8 +20,17 @@ inject() {
 restore() {
     CID="$(container_id "$TARGET")"
     echo "Removing netem loss from $TARGET's $IFACE..."
-    docker run --rm --net=container:"$CID" --cap-add=NET_ADMIN nicolaka/netshoot \
-        tc qdisc del dev "$IFACE" root netem || echo "(already clean, nothing to remove)"
+    # Same fix as fault 9's restore - only the confirmed benign message counts
+    # as "already clean"; any other failure must be reported, not swallowed.
+    OUTPUT="$(docker run --rm --net=container:"$CID" --cap-add=NET_ADMIN nicolaka/netshoot \
+        tc qdisc del dev "$IFACE" root netem 2>&1)" && echo "Removed." || {
+        if [[ "$OUTPUT" == *"Invalid qdisc name"* ]]; then
+            echo "(already clean, nothing to remove)"
+        else
+            echo "ERROR: restore failed unexpectedly: $OUTPUT" >&2
+            exit 1
+        fi
+    }
 }
 
 case "${1:-}" in

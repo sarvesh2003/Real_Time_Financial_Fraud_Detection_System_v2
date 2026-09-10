@@ -15,12 +15,16 @@ inject() {
 }
 
 restore() {
-    CID="$(container_id "$TARGET")"
-    echo "Removing CPU limit on $TARGET..."
-    # `docker update --cpus=0` does NOT reliably clear the limit (confirmed by
-    # testing — the higher-level --cpus flag silently no-ops at 0 on this
-    # Docker version). The lower-level --cpu-quota=-1 actually works.
-    docker update --cpu-quota=-1 "$CID"
+    echo "Recreating $TARGET to fully clear the CPU cap..."
+    # Neither `docker update --cpu-quota=-1` nor `docker update --cpus=0`
+    # actually clears `HostConfig.NanoCpus` once inject() has set it —
+    # confirmed by direct testing (docker inspect kept showing the injected
+    # NanoCpus value after both). Docker's update only overwrites a field
+    # when the incoming value is non-zero, so the cap silently survives any
+    # `docker update`-based restore and comes back on the container's next
+    # unrelated restart. Recreating from the compose file is the only
+    # reliable way to actually clear it — same cost as a normal restart.
+    compose up -d --force-recreate -- "$TARGET"
 }
 
 case "${1:-}" in

@@ -23,8 +23,22 @@ inject() {
 restore() {
     CID="$(container_id "$TARGET")"
     echo "Removing netem delay from $TARGET's $IFACE..."
-    docker run --rm --net=container:"$CID" --cap-add=NET_ADMIN nicolaka/netshoot \
-        tc qdisc del dev "$IFACE" root netem || echo "(already clean, nothing to remove)"
+    # Only "Error: Invalid qdisc name." (confirmed by direct testing — this is
+    # tc's real message when there's no netem qdisc to remove) counts as
+    # "already clean." Anything else (wrong container, image pull failure,
+    # daemon hiccup) is a genuine restore failure and must not be swallowed —
+    # this fault is specifically designed to produce zero error signs
+    # anywhere, so a silently-failed restore would be invisible and corrupt
+    # every later trial.
+    OUTPUT="$(docker run --rm --net=container:"$CID" --cap-add=NET_ADMIN nicolaka/netshoot \
+        tc qdisc del dev "$IFACE" root netem 2>&1)" && echo "Removed." || {
+        if [[ "$OUTPUT" == *"Invalid qdisc name"* ]]; then
+            echo "(already clean, nothing to remove)"
+        else
+            echo "ERROR: restore failed unexpectedly: $OUTPUT" >&2
+            exit 1
+        fi
+    }
 }
 
 case "${1:-}" in

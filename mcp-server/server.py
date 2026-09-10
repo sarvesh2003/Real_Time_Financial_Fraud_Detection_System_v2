@@ -7,6 +7,7 @@ Transport: stdio (per the project plan — this runs as a subprocess of the
 agent on the same machine that has Docker CLI access).
 """
 
+import hashlib
 import json
 import os
 import re
@@ -98,7 +99,7 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         Matching log lines, newest last, one per line. Capped at 500 lines —
         narrow the time window or add a grep filter if you need more precision.
     """
-    result = _run_compose("logs", "--no-color", f"--since={since}", service)
+    result = _run_compose("logs", "--no-color", f"--since={since}", "--", service)
 
     if result.returncode != 0:
         return f"ERROR: could not fetch logs for '{service}': {result.stderr.strip()}"
@@ -240,7 +241,7 @@ def get_container_state() -> str:
 def _read_redis_config(service: str) -> str:
     lines = []
     for key in _REDIS_CONFIG_KEYS:
-        result = _run_compose("exec", "-T", service, "redis-cli", "CONFIG", "GET", key)
+        result = _run_compose("exec", "-T", "--", service, "redis-cli", "CONFIG", "GET", key)
         if result.returncode != 0:
             lines.append(f"{key}: ERROR ({result.stderr.strip()})")
             continue
@@ -253,7 +254,9 @@ def _read_redis_config(service: str) -> str:
 
 
 def _read_container_env_config(service: str) -> str:
-    ps = _run_compose("ps", "-q", service)
+    ps = _run_compose("ps", "-q", "--", service)
+    if ps.returncode != 0:
+        return f"ERROR: could not list containers for '{service}': {ps.stderr.strip()}"
     # A scaled service (e.g. go-enricher with N replicas) returns one
     # container ID per line. All replicas share identical env config (same
     # image, same compose `environment:` block), so the first one is enough
@@ -331,8 +334,11 @@ def list_recent_changes(window: str) -> str:
         window: How far back to look, e.g. "30m", "2h", "1d".
 
     Returns:
-        One line per change, oldest first: timestamp (UTC), fault family,
-        fault name, and action (inject/restore).
+        One line per change, oldest first: timestamp (UTC), an opaque change
+        ID (stable per underlying change, so repeats are recognizable), and
+        the action (inject/restore). Does not name what the change was -
+        this tells you *that* something was deliberately changed, not what
+        to conclude from it.
     """
     try:
         window_seconds = _parse_duration_seconds(window)
@@ -359,7 +365,16 @@ def list_recent_changes(window: str) -> str:
                 continue
             if ts.timestamp() < cutoff:
                 continue
-            lines.append(f"{entry['timestamp']} | {entry.get('family', '?')}/{entry.get('fault', '?')} | {entry.get('action', '?')}")
+            # Deliberately do NOT expose family/fault here - this tool tells the
+            # agent "something was deliberately changed," not "here is the exact
+            # test-fixture name of what changed" (that would just hand over the
+            # answer to the very thing the agent is supposed to diagnose). The
+            # hash is stable per family/fault so the agent can still notice "this
+            # same thing was toggled twice" without ever seeing what it's called.
+            change_id = hashlib.sha256(
+                f"{entry.get('family', '?')}/{entry.get('fault', '?')}".encode()
+            ).hexdigest()[:8]
+            lines.append(f"{entry['timestamp']} | change=CHG-{change_id} | {entry.get('action', '?')}")
 
     if not lines:
         return f"(no changes recorded in the last {window})"

@@ -8,18 +8,23 @@
 set -euo pipefail
 source "$(dirname "$0")/../common.sh"
 
-BURST_USER="${BURST_USER:-fault-burst-user}"
+# A self-describing default (e.g. "fault-burst-user") would show up verbatim
+# in go-server/go-enricher logs and hand the agent the answer - real user ids
+# are UUIDs (see python-producer/transaction-generator-models/userIds_10k.csv),
+# so the burst has to look like one too.
+BURST_USER="${BURST_USER:-a47ac10b-58cc-4372-a567-0e02b2c3d900}"
 BURST_COUNT="${BURST_COUNT:-500}"
 
 inject() {
     echo "Sending $BURST_COUNT transactions for a single user ($BURST_USER)..."
     compose exec -T python-producer python3 -c "
-import time, uuid, grpc
+import sys, time, uuid, grpc
 from proto.fraud.v1 import fraud_pb2, fraud_pb2_grpc
 
 channel = grpc.insecure_channel('go-server:50051')
 stub = fraud_pb2_grpc.FraudIngestionStub(channel)
 
+sent, failed = 0, 0
 for i in range($BURST_COUNT):
     req = fraud_pb2.TransactionRequest(
         transaction_id=str(uuid.uuid4()),
@@ -37,9 +42,18 @@ for i in range($BURST_COUNT):
     )
     try:
         stub.SendTransaction(req)
+        sent += 1
     except grpc.RpcError:
-        pass
-print('Burst done.')
+        failed += 1
+
+print(f'Burst done: {sent} sent, {failed} failed.')
+# A burst that's mostly rejected (server down, rate-limited, etc.) produces
+# no real partition skew even though the script would otherwise still print
+# success - fail loudly instead so a silently-failed injection can't be
+# mistaken for a working one.
+if sent < $BURST_COUNT * 0.9:
+    print(f'ERROR: only {sent}/{$BURST_COUNT} transactions actually sent - the skew this fault relies on did not happen.', file=sys.stderr)
+    sys.exit(1)
 "
     echo "Done. Check per-partition offsets/lag for skew."
 }
