@@ -54,6 +54,8 @@ def load_results() -> list[dict]:
                         row[key] = float(row[key])
                     except ValueError:
                         pass
+                else:
+                    row[key] = None
             rows.append(row)
     return rows
 
@@ -95,6 +97,25 @@ def env_metrics(rows: list[dict], rubric_by_id: dict) -> dict:
     self_reported_confirmed = [r for r in rows if r.get("model_self_reported_confidence") == "confirmed"]
     self_reported_wrong = sum(1 for r in self_reported_confirmed if r.get("score") in (0, 1))
     gate_bind_count = sum(1 for r in rows if r.get("confidence") != r.get("model_self_reported_confidence"))
+    # downgrade_reason only exists on rows produced after this field was added to
+    # agent/run.py's build_result() - absent (None) on every claude-desktop row (no
+    # budget concept there, so any of their downgrades are corroboration-only by
+    # construction) and on automated rows collected before the field existed.
+    # Reported separately from gate_bind_count above (which stays as the raw total,
+    # for continuity with earlier summaries) so budget-exhaustion downgrades are
+    # never described as "corroboration" firing - they are a different mechanism.
+    def _is_downgraded(r: dict) -> bool:
+        return r.get("confidence") != r.get("model_self_reported_confidence")
+
+    budget_exhaustion_gate_count = sum(1 for r in rows if r.get("downgrade_reason") == "budget_exhausted")
+    corroboration_gate_count = sum(
+        1 for r in rows
+        if _is_downgraded(r) and (
+            r.get("downgrade_reason") == "corroboration"
+            or (not r.get("downgrade_reason") and str(r.get("env_label", "")).startswith("claude-desktop"))
+        )
+    )
+    unattributed_gate_count = gate_bind_count - corroboration_gate_count - budget_exhaustion_gate_count
 
     # Efficiency.
     correct_rows = [r for r in rows if r.get("score") == 2 and r.get("calls_used") is not None]
@@ -134,6 +155,9 @@ def env_metrics(rows: list[dict], rubric_by_id: dict) -> dict:
         "crashed_count": crashed_count, "parse_failure_count": parse_failure_count,
         "reliability": reliability,
         "gate_bind_count": gate_bind_count,
+        "corroboration_gate_count": corroboration_gate_count,
+        "budget_exhaustion_gate_count": budget_exhaustion_gate_count,
+        "unattributed_gate_count": unattributed_gate_count,
         "self_reported_false_confidence_rate": self_reported_wrong / n if n else 0,
         "mean_calls_to_resolution": mean_calls_to_resolution,
         "mean_cited_baseline_fraction": mean_cited_baseline_fraction,
@@ -289,9 +313,11 @@ def main() -> None:
         lines.append("Reliability table:")
         for tier, d in m["reliability"].items():
             lines.append(f"  - {tier}: n={d['n']}, correct={d['correct']}, accuracy={fmt_pct(d['accuracy'])}")
-        lines.append(f"- Corroboration-gate ablation: gate fired on {m['gate_bind_count']}/{m['n']} runs; "
-                      f"false-confidence rate WITHOUT the gate (raw self-reported) = {fmt_pct(m['self_reported_false_confidence_rate'])} "
-                      f"vs WITH the gate = {fmt_pct(m['false_confidence_rate'])}")
+        lines.append(f"- Confidence-downgrade ablation: any gate fired on {m['gate_bind_count']}/{m['n']} runs "
+                      f"({m['corroboration_gate_count']} corroboration, {m['budget_exhaustion_gate_count']} "
+                      f"budget-exhaustion, {m['unattributed_gate_count']} from before downgrade_reason was tracked); "
+                      f"false-confidence rate WITHOUT any gate (raw self-reported) = {fmt_pct(m['self_reported_false_confidence_rate'])} "
+                      f"vs WITH the gate(s) = {fmt_pct(m['false_confidence_rate'])}")
         lines.append("")
         lines.append(f"- Contrast-pair accuracy (strict, both must be correct): {pairs['passed']}/{pairs['total']} "
                       f"({fmt_pct(pairs['rate'])})")

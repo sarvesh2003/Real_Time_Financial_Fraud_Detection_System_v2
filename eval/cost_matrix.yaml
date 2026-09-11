@@ -1,4 +1,7 @@
-# Pre-registered cost matrix, committed BEFORE any eval run - see
+# Cost matrix for the eval. Git version-control tracking of this file
+# begins at commit 5829c9f, after faults 1-4 had already run - it was not
+# committed before any eval run and should not be described as
+# pre-registered for those faults. See
 # personal-notes/implementation-logs.md for the eval design discussion.
 # Units are engineer-minutes-equivalent; only the RATIOS between cells
 # matter for the resulting skill score, not the absolute numbers.

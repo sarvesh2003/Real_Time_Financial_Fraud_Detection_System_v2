@@ -1,6 +1,8 @@
 """
 Mechanical grading: reads every result.json under eval/runs/, scores it
-against the pre-registered eval/rubric.yaml, and writes eval/results.csv.
+against eval/rubric.yaml, and writes eval/results.csv. rubric.yaml's own
+header states exactly when it was committed to version control, and for
+which faults - check there before describing this scoring as pre-anything.
 
 Scoring (mirrors rubric.yaml's header comment):
     2  = mechanism (+ mechanism_and, if present) + target all hit, no disqualifier
@@ -140,6 +142,13 @@ def main() -> None:
             continue
 
         grading = score_run(result, rubric_entry)
+        # A human (or a human-written grading note) may have already flagged this
+        # row as needing review directly in its own result.json - e.g. a Claude
+        # Desktop row graded from a narrated transcript with no verifiable tool-call
+        # count. That flag must not be silently lost just because grade.py's own
+        # phrase-matching heuristics didn't independently spot a problem - OR it in
+        # before the override check below, which is still the only way to close it.
+        grading["needs_review"] = grading["needs_review"] or bool(result.get("needs_review"))
         run_id = result.get("run_id")
         human_resolved = False
         if run_id in overrides:

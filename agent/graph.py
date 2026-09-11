@@ -1,44 +1,3 @@
-"""
-LangGraph state machine for the evidence-driven incident investigator.
-
-Simplified architecture (personal-notes/implementation-logs.md, Step 43).
-The previous version locked in a fixed list of 2-4 hypotheses before any real
-evidence existed, then only ever asked the model "does this new evidence
-match one of these guesses" - so a genuine anomaly that didn't fit the
-initial guesses got filed as "irrelevant" even after being found (observed
-live: the agent read redis1's real maxmemory=5MB cap at tool call 3, called
-it neutral because no hypothesis predicted it, then a recency-based
-evidence-collapsing rule erased the number from view before it could ever be
-compared against a healthy peer). That scaffolding was built to compensate
-for a 9B model with a 4096-token context ceiling that couldn't be trusted to
-reason freely across a whole investigation. Running a real 14B/32K-context
-model exposed that "guess first, then classify everything against the
-guess" was actively working against a model capable of just investigating.
-
-New shape:
-
-    START -> investigate -> [tool_call | conclude]
-    tool_call -> investigate
-
-`investigate` has no pre-set list of theories evidence gets checked against.
-It sees the full, uncollapsed evidence log every round and freely decides
-what to check next, or when to conclude - forming and revising its own
-theory as it goes, the same way a human on-call engineer would.
-
-Hard rules still enforced in code (not just prompted) - these are genuine
-rigor, not model-trust workarounds:
-- A conclusion can only be reported "confirmed" if the evidence the model
-  itself cites for it spans >=2 DISTINCT tool names (CORROBORATION_THRESHOLD).
-  Enforced in `conclude`, which downgrades the model's own confidence label
-  if the cited evidence doesn't actually back it up.
-- Retrieved corpus context is advisory only - fault family/name for
-  orientation, never the stored root-cause text, and never treated as
-  evidence for THIS investigation.
-- Hard stop at TOOL_CALL_BUDGET tool calls.
-- The only tools ever bound are whatever the MCP server exposes - all 5 are
-  read-only by construction, so no extra enforcement is needed here.
-"""
-
 from __future__ import annotations
 
 import json
@@ -62,21 +21,10 @@ COLLECTION_NAME = "fault_investigations"
 
 TOOL_CALL_BUDGET = 15
 CORROBORATION_THRESHOLD = 2
-# Per-entry cap on how much of a tool result gets shown. No age-based
-# collapsing anymore - a 32K-context model can hold TOOL_CALL_BUDGET entries
-# at this cap in full, every round, so nothing gathered ever goes stale or
-# gets erased before the model is done with the investigation.
 EVIDENCE_RESULT_CHAR_CAP = 2000
 RETRIEVAL_DISTANCE_CUTOFF = 1.0
-# Ablation switch for the eval harness: RETRIEVAL_MODE=off skips the corpus
-# lookup entirely (not just hides its output), so the "with RAG" vs
-# "without RAG" comparison measures whether retrieval actually changes the
-# investigation, not just whether its text happens to be visible. Read
-# once at import time - set via env var before starting run.py.
 RETRIEVAL_ENABLED = os.environ.get("RETRIEVAL_MODE", "on").strip().lower() != "off"
 
-
-# ---------------------------------------------------------------- state ----
 
 class EvidenceEntry(TypedDict):
     tool_name: str
@@ -105,11 +53,9 @@ class InvestigationState(TypedDict):
     trace: list[dict]
 
 
-def _trace_event(event: str, **data) -> dict:
+def trace_event(event: str, **data) -> dict:
     return {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **data}
 
-
-# ------------------------------------------------- LLM-facing schemas ------
 
 class ConcludeOut(BaseModel):
     root_cause_id: str = Field(description="short kebab-case slug you invent for this root cause, e.g. 'redis1-maxmemory-misconfigured'. Use 'none' if inconclusive.")
@@ -136,30 +82,13 @@ class ConcludeInvestigation(BaseModel):
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-def _as_text(result) -> str:
-    """
-    LangChain tool results come back as a list of content blocks
-    (e.g. [{'type': 'text', 'text': '...', 'id': 'lc_<random-uuid>'}]), not a
-    plain string. Storing str(result) verbatim means every evidence entry
-    carries Python list/dict syntax and a fresh random id on every call (two
-    identical tool calls produce different-looking "evidence"), which adds
-    pure noise to the model's prompts and breaks simple prefix checks like
-    "does this start with ERROR:". Extract the actual text instead.
-    """
+def as_text(result) -> str:
     if isinstance(result, list) and all(isinstance(b, dict) and b.get("type") == "text" for b in result):
         return "\n".join(b.get("text", "") for b in result)
     return str(result)
 
 
-def _llm_call_meta(response, t0: float) -> dict:
-    """
-    Timing/token bookkeeping for one LLM call, for the eval harness's cost
-    metrics (Group E/G) - kept as a plain dict rather than adding fields to
-    every schema, since it's the same shape regardless of which schema (or
-    no schema, for investigate's tool-routing call) the call was for.
-    usage_metadata is populated by langchain-openai from the API response
-    when the provider returns it - absent/None on providers that don't.
-    """
+def llm_call_meta(response, t0: float) -> dict:
     usage = getattr(response, "usage_metadata", None) or {}
     return {
         "llm_ms": (time.monotonic() - t0) * 1000,
@@ -169,21 +98,7 @@ def _llm_call_meta(response, t0: float) -> dict:
     }
 
 
-async def _ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) -> tuple[SchemaT, dict]:
-    """
-    Provider-agnostic structured output: prompts for raw JSON and parses it
-    ourselves, instead of relying on a model calling a fake "tool" whose only
-    job is to shape the answer. Some models (e.g. gemma4:e2b-it-qat via
-    Ollama) reliably call REAL tools but won't reliably force a tool call
-    that's just JSON formatting, even with tool_choice="required" - see
-    implementation-logs.md for the diagnosis. Works the same on any provider,
-    since it doesn't depend on a specific structured-output API feature.
-
-    Returns (parsed_schema_instance, call_metadata) - the caller needs the
-    metadata for the eval harness's cost/timing metrics, and returning it
-    here (rather than a second call to re-derive it) keeps there being only
-    one LLM call per logical step.
-    """
+async def ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) -> tuple[SchemaT, dict]:
     schema_json = json.dumps(schema.model_json_schema(), indent=2)
     instruction = HumanMessage(content=(
         "Respond with ONLY a single valid JSON object matching this schema - "
@@ -191,7 +106,7 @@ async def _ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage])
     ))
     t0 = time.monotonic()
     response = await llm.ainvoke([*messages, instruction])
-    llm_meta = _llm_call_meta(response, t0)
+    llm_meta = llm_call_meta(response, t0)
     text = response.content.strip()
 
     if text.startswith("```"):
@@ -215,8 +130,6 @@ async def _ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage])
     try:
         return schema.model_validate(data), llm_meta
     except ValidationError as e:
-        # Quirk 1: model wraps the answer as {"SchemaName": {...}}
-        # instead of the bare fields. Try unwrapping a single-key dict once.
         if isinstance(data, dict) and len(data) == 1:
             inner = next(iter(data.values()))
             if isinstance(inner, dict):
@@ -224,13 +137,6 @@ async def _ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage])
                     return schema.model_validate(inner), llm_meta
                 except ValidationError:
                     pass
-        # Quirk 2: model echoes the JSON-SCHEMA shape it was shown (the
-        # instruction message embeds schema.model_json_schema(), which itself
-        # has a top-level "properties" key) and fills real answer values
-        # into "properties" instead of producing a flat instance of the
-        # schema - e.g. {"properties": {"summary": "...", ...}, "required":
-        # [...], "title": "...", "type": "object"}. Observed live on
-        # qwen3.5:9b (see implementation-logs.md).
         if isinstance(data, dict) and isinstance(data.get("properties"), dict):
             try:
                 return schema.model_validate(data["properties"]), llm_meta
@@ -239,7 +145,7 @@ async def _ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage])
         raise ValueError(f"Model's JSON didn't match {schema.__name__}'s schema. parsed={data!r}") from e
 
 
-def _parse_config_lines(text: str) -> dict[str, str]:
+def parse_config_lines(text: str) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for line in text.splitlines():
         sep = " = " if " = " in line else ("=" if "=" in line and not line.startswith("(") else None)
@@ -250,14 +156,8 @@ def _parse_config_lines(text: str) -> dict[str, str]:
     return parsed
 
 
-def _peer_config_diff(configs: dict[str, str]) -> str:
-    """
-    Group services with the same base name (redis1/redis2/redis3 -> "redis")
-    and report any config key that differs across the group. Purely
-    mechanical - no knowledge of what any key or value means, so it applies
-    equally to any peer group this stack has, present or future.
-    """
-    parsed = {service: _parse_config_lines(text) for service, text in configs.items()}
+def peer_config_diff(configs: dict[str, str]) -> str:
+    parsed = {service: parse_config_lines(text) for service, text in configs.items()}
     groups: dict[str, list[str]] = {}
     for service in parsed:
         base = re.sub(r"\d+$", "", service)
@@ -280,16 +180,7 @@ def _peer_config_diff(configs: dict[str, str]) -> str:
     return "\n".join(diff_lines)
 
 
-def _retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
-    """
-    Advisory-only retrieval, re-run live against the CURRENT evidence log
-    each round (not once upfront against a thin initial-symptom string) -
-    so the query gets more specific as the investigation progresses. Only
-    fault_family/fault_name are ever surfaced to the model - never the
-    stored root_cause text, which would otherwise put the answer to a past,
-    possibly-identical-looking case directly in front of the model on every
-    single round.
-    """
+def retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
     results = collection.query(query_texts=[query_text], n_results=3)
     retrieved: list[RetrievedCase] = []
     if results["ids"] and results["ids"][0]:
@@ -302,23 +193,10 @@ def _retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
     return retrieved
 
 
-# --------------------------------------------------------------- graph -----
-
 def build_graph(llm, tools: list[BaseTool], collection):
     tools_by_name = {t.name: t for t in tools}
 
     async def baseline(state: InvestigationState) -> dict:
-        """
-        A deterministic, code-driven survey - no LLM call, no fault
-        knowledge, nothing charged against TOOL_CALL_BUDGET. A human on-call
-        engineer doesn't spend investigation budget opening the standard
-        dashboard; making this free is what let a 9-tool-call sweep find a
-        config-drift fault on round 1 instead of the model having to guess
-        its way there through 15 narrow, model-chosen calls. Services to
-        read_config on are parsed out of get_container_state's own live
-        output, not a hardcoded list, so this stays generic as the stack
-        changes.
-        """
         events: list[dict] = []
         evidence: list[EvidenceEntry] = []
 
@@ -328,12 +206,12 @@ def build_graph(llm, tools: list[BaseTool], collection):
                 return ""
             t0 = time.monotonic()
             try:
-                text = _as_text(await tool.ainvoke(args))
-            except Exception as e:  # noqa: BLE001 - a failed baseline probe is evidence too, not a crash (same rule as tool_call)
+                text = as_text(await tool.ainvoke(args))
+            except Exception as e:
                 text = f"TOOL ERROR: {e}"
             tool_ms = (time.monotonic() - t0) * 1000
             evidence.append({"tool_name": name, "args": args, "result": text})
-            events.append(_trace_event("tool_call", node="baseline", tool_name=name, args=args, result=text[:2000], tool_ms=tool_ms))
+            events.append(trace_event("tool_call", node="baseline", tool_name=name, args=args, result=text[:2000], tool_ms=tool_ms))
             return text
 
         container_text = await run("get_container_state", {})
@@ -352,24 +230,17 @@ def build_graph(llm, tools: list[BaseTool], collection):
             seen_services.add(service)
             configs[service] = await run("read_config", {"service": service})
 
-        # Code-computed peer diff, not model-guessed: group services that
-        # share a base name (redis1/redis2/redis3 -> "redis") and flag any
-        # config key that differs across the group. This is what actually
-        # matters for a config-drift fault - not "here is redis1's config"
-        # in isolation, but "redis1 differs from redis2 and redis3 on
-        # exactly these keys," which a model can act on without first
-        # having to know which value is the "normal" one for this system.
-        diff_note = _peer_config_diff(configs)
+        diff_note = peer_config_diff(configs)
         if diff_note:
             evidence.append({"tool_name": "config_diff", "args": {}, "result": diff_note})
-            events.append(_trace_event("tool_call", node="baseline", tool_name="config_diff", args={}, result=diff_note[:2000]))
+            events.append(trace_event("tool_call", node="baseline", tool_name="config_diff", args={}, result=diff_note[:2000]))
 
         return {
             "evidence_log": state["evidence_log"] + evidence,
             "trace": state["trace"] + events,
         }
 
-    def _investigate_prompt(state: InvestigationState) -> tuple[str, list[RetrievedCase]]:
+    def investigate_prompt(state: InvestigationState) -> tuple[str, list[RetrievedCase]]:
         evidence_lines = [
             f"{i}. [{e['tool_name']}({e['args']})] {e['result'][:EVIDENCE_RESULT_CHAR_CAP]}"
             for i, e in enumerate(state["evidence_log"])
@@ -379,21 +250,12 @@ def build_graph(llm, tools: list[BaseTool], collection):
         recent_result_text = " ".join(e["result"][:300] for e in state["evidence_log"][-3:])
         query_text = f"{state['trigger']} {recent_result_text}".strip()
         if RETRIEVAL_ENABLED:
-            retrieved_all = _retrieve_context(collection, query_text)
-            # A retrieval this far from anything in a 5-record corpus is
-            # noise, not a lead - showing it anyway (observed live) reads as
-            # a confident-looking suggestion and can anchor the model on an
-            # unrelated fault family. RETRIEVAL_DISTANCE_CUTOFF is Chroma's
-            # cosine distance (smaller = closer); 1.0 is roughly "no better
-            # match than random" for this corpus's embeddings.
+            retrieved_all = retrieve_context(collection, query_text)
             retrieved = [c for c in retrieved_all if c["distance"] <= RETRIEVAL_DISTANCE_CUTOFF]
             retrieved_text = "\n".join(
                 f"- {c['fault_family']}/{c['fault_name']}" for c in retrieved
             ) or "(no sufficiently similar past case)"
         else:
-            # Ablation arm: no corpus lookup happens at all - the model gets
-            # nothing here, not even a "disabled" placeholder that could
-            # itself read as a hint that retrieval would normally fire.
             retrieved = []
             retrieved_text = "(none)"
 
@@ -420,28 +282,25 @@ def build_graph(llm, tools: list[BaseTool], collection):
         return prompt, retrieved
 
     async def investigate(state: InvestigationState) -> dict:
-        prompt, retrieved = _investigate_prompt(state)
+        prompt, retrieved = investigate_prompt(state)
         router_llm = llm.bind_tools(tools + [ConcludeInvestigation])
         t0 = time.monotonic()
         response = await router_llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=prompt),
         ])
-        llm_meta = _llm_call_meta(response, t0)
+        llm_meta = llm_call_meta(response, t0)
 
-        # An empty tool-call list with finish_reason "length" means the model
-        # ran out of room before finishing a real tool call - not a
-        # deliberate choice to conclude. Retry once before treating it as one.
         truncated_retry = False
         if not response.tool_calls and response.response_metadata.get("finish_reason") == "length":
             truncated_retry = True
-            wasted_meta = llm_meta  # the first (truncated) attempt's cost - still real spend, don't drop it
+            wasted_meta = llm_meta
             t0 = time.monotonic()
             response = await router_llm.ainvoke([
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ])
-            llm_meta = _llm_call_meta(response, t0)
+            llm_meta = llm_call_meta(response, t0)
             llm_meta = {
                 "llm_ms": wasted_meta["llm_ms"] + llm_meta["llm_ms"],
                 "input_tokens": (wasted_meta["input_tokens"] or 0) + (llm_meta["input_tokens"] or 0),
@@ -458,7 +317,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
             else:
                 action = {"type": "tool_call", "name": call["name"], "args": call["args"]}
 
-        event = _trace_event(
+        event = trace_event(
             "action_selected", node="investigate", action=action,
             calls_used=state["calls_used"], truncated_retry=truncated_retry,
             retrieved=[{"fault_family": c["fault_family"], "fault_name": c["fault_name"], "distance": c["distance"]} for c in retrieved],
@@ -477,12 +336,6 @@ def build_graph(llm, tools: list[BaseTool], collection):
     async def tool_call(state: InvestigationState) -> dict:
         action = state["pending_action"]
 
-        # Hard, code-level duplicate guard - don't trust the prompt alone to
-        # stop the model repeating an identical call (same tool, same args).
-        # Skips real execution (no point re-running a read-only, idempotent
-        # tool for the same answer) but still counts against the budget, so a
-        # model that keeps repeating itself still runs out of calls rather
-        # than looping forever.
         dup_idx = next(
             (i for i, e in enumerate(state["evidence_log"])
              if e["tool_name"] == action["name"] and e["args"] == action["args"]),
@@ -494,20 +347,18 @@ def build_graph(llm, tools: list[BaseTool], collection):
         else:
             tool = tools_by_name.get(action["name"])
             if tool is None:
-                # A hallucinated tool name is a failed observation, not a
-                # crash - without this, it would take the whole graph down.
                 text = f"TOOL ERROR: no such tool '{action['name']}'"
             else:
                 t0 = time.monotonic()
                 try:
-                    text = _as_text(await tool.ainvoke(action["args"]))
-                except Exception as e:  # noqa: BLE001 - a failed tool call is evidence too, not a crash
+                    text = as_text(await tool.ainvoke(action["args"]))
+                except Exception as e:
                     text = f"TOOL ERROR: {e}"
                 tool_ms = (time.monotonic() - t0) * 1000
 
         entry: EvidenceEntry = {"tool_name": action["name"], "args": action["args"], "result": text}
         calls_used = state["calls_used"] + 1
-        event = _trace_event(
+        event = trace_event(
             "tool_call", node="tool_call", tool_name=action["name"], args=action["args"],
             result=text[:2000], calls_used=calls_used, tool_ms=tool_ms,
         )
@@ -529,7 +380,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
         )
 
         try:
-            result, llm_meta = await _ask_for_json(llm, ConcludeOut, [
+            result, llm_meta = await ask_for_json(llm, ConcludeOut, [
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=(
                     f"Investigation is ending. {budget_note}\n\n"
@@ -546,12 +397,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
                     "cite every piece of evidence that genuinely backs your conclusion, not just one."
                 )),
             ])
-        except Exception as e:  # noqa: BLE001 - covers ValueError (bad JSON) and anything else about this one
-            # call (e.g. AttributeError on unexpected content shape, a raw
-            # API error) - a one-shot eval run can't afford to lose a whole
-            # run's worth of evidence just because this ONE call had a
-            # problem. Record it as a scoreable outcome ("this environment
-            # couldn't produce a final answer"), not a crash.
+        except Exception as e:
             conclusion = {
                 "root_cause_id": "PARSE_FAILURE",
                 "summary": "",
@@ -562,8 +408,9 @@ def build_graph(llm, tools: list[BaseTool], collection):
                 "distinct_supporting_tools": [],
                 "calls_used": state["calls_used"],
                 "budget": TOOL_CALL_BUDGET,
+                "downgrade_reason": None,
             }
-            event = _trace_event(
+            event = trace_event(
                 "conclusion", node="conclude", conclusion=conclusion, parse_failure=True,
                 llm_ms=0.0, input_tokens=None, output_tokens=None, finish_reason=None,
             )
@@ -572,9 +419,17 @@ def build_graph(llm, tools: list[BaseTool], collection):
         valid_indices = [i for i in result.cited_evidence_indices if 0 <= i < len(state["evidence_log"])]
         distinct_supporting_tools = sorted({state["evidence_log"][i]["tool_name"] for i in valid_indices})
 
+        corroboration_shortfall = result.confidence == "confirmed" and len(distinct_supporting_tools) < CORROBORATION_THRESHOLD
+        budget_exhausted = result.confidence == "confirmed" and state["calls_used"] >= TOOL_CALL_BUDGET
+
         enforced_confidence = result.confidence
-        if result.confidence == "confirmed" and len(distinct_supporting_tools) < CORROBORATION_THRESHOLD:
+        downgrade_reason = None
+        if budget_exhausted:
             enforced_confidence = "best_guess"
+            downgrade_reason = "budget_exhausted"
+        elif corroboration_shortfall:
+            enforced_confidence = "best_guess"
+            downgrade_reason = "corroboration"
 
         conclusion = {
             "root_cause_id": result.root_cause_id,
@@ -586,8 +441,9 @@ def build_graph(llm, tools: list[BaseTool], collection):
             "distinct_supporting_tools": distinct_supporting_tools,
             "calls_used": state["calls_used"],
             "budget": TOOL_CALL_BUDGET,
+            "downgrade_reason": downgrade_reason,
         }
-        event = _trace_event("conclusion", node="conclude", conclusion=conclusion, **llm_meta)
+        event = trace_event("conclusion", node="conclude", conclusion=conclusion, **llm_meta)
         return {"conclusion": conclusion, "trace": state["trace"] + [event]}
 
     graph = StateGraph(InvestigationState)

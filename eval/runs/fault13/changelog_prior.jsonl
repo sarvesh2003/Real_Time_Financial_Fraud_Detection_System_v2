@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-11T03:27:35Z","family":"kafka","fault":"06_rebalance_churn","action":"inject"}
+{"timestamp":"2026-09-11T03:49:11Z","family":"kafka","fault":"06_rebalance_churn","action":"restore"}

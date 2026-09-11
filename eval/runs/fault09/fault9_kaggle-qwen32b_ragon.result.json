@@ -1,0 +1,66 @@
+{
+  "run_id": "fault9_kaggle-qwen32b_ragon",
+  "fault_id": "9",
+  "fault_family": "network",
+  "fault_name": "latency_injection",
+  "env_label": "kaggle-qwen32b",
+  "retrieval_mode": "on",
+  "provider": "ollama",
+  "model_id": "qwen2.5:32b-instruct",
+  "base_url": "https://b737-34-139-4-39.ngrok-free.app/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 366.27657730001374,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 29030214529,
+    "size_vram_bytes": 28090721892,
+    "vram_fraction": 0.9676374201071961
+  },
+  "calls_used": 1,
+  "budget_exhausted": false,
+  "llm_calls": 3,
+  "llm_ms_total": 337326.1004000087,
+  "tool_ms_total": 25536.5288000321,
+  "input_tokens_total": 20100,
+  "output_tokens_total": 503,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 15,
+  "baseline_config_diff_fired": false,
+  "tool_call_sequence": [
+    "query_logs"
+  ],
+  "distinct_tools_used_total": [
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "query_logs",
+    "read_config"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "none",
+  "summary": "The system appears to be in a steady state with no significant anomalies detected. All services are running and healthy, and there are no recent changes listed.",
+  "reasoning": "The evidence shows that all containers are running and healthy, and the metrics indicate that all instances of go-enricher are up. The recent changes list does not show any changes in the last 24 hours. However, there is no specific anomaly or issue identified that would allow for a more conclusive root cause.",
+  "confidence": "inconclusive",
+  "model_self_reported_confidence": "inconclusive",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    0,
+    1,
+    2
+  ],
+  "distinct_supporting_tools": [
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes"
+  ],
+  "n_cited": 3,
+  "cited_baseline_fraction": 1.0,
+  "evidence_groundedness": null,
+  "downgrade_reason": null
+}

@@ -1,6 +1,8 @@
-# Pre-registered ground truth for the 15-fault eval, written BEFORE any run.
-# Committing this before execution is what makes the grading defensible -
-# see personal-notes/implementation-logs.md for the eval design rationale.
+# Ground truth for the 15-fault eval. Git version-control tracking of this
+# file begins at commit 5829c9f, after faults 1-4 had already run - it was
+# not committed before execution and should not be described as
+# pre-registered for those faults. See
+# personal-notes/implementation-logs.md for the eval design rationale.
 #
 # Scoring (applied by eval/grade.py):
 #   2 = mechanism_any_of hit AND (mechanism_and_any_of hit, if present) AND
@@ -217,8 +219,12 @@ faults:
     disqualifiers:
       - id: confused_with_3
         any_of: ["maxclients", "server-side connection limit"]
+      # NOT bare "retry"/"backoff" - a correct answer can legitimately
+      # mention retries in passing (e.g. "any retry would also hit the same
+      # low threshold") without claiming a misconfigured retry/backoff
+      # policy (fault 15's actual mechanism) is the cause.
       - id: confused_with_15
-        any_of: ["retry", "backoff"]
+        any_of: ["retry policy is misconfigured", "backoff is misconfigured", "bad retry", "bad backoff", "backoff policy issue", "retry storm"]
     look_alike_of: 4
 
   - fault_id: 14
@@ -263,8 +269,14 @@ faults:
     disqualifiers:
       - id: confused_with_2
         any_of: ["evict", "allkeys-lru", "eviction storm"]
+      # NOT bare "redis2"/"redis3" - every correct answer names them as the
+      # healthy peers being diffed against redis1 (config_diff surfaces the
+      # maxmemory difference across all three). Only phrases that actually
+      # blame redis2/redis3 as the misconfigured/rejecting node count as the
+      # wrong target.
       - id: wrong_node
-        any_of: ["redis2", "redis3"]
+        any_of: ["redis2 is misconfigured", "redis2's maxmemory-policy", "redis2 is the outlier", "redis2 is the anomaly", "redis2 is rejecting writes",
+                 "redis3 is misconfigured", "redis3's maxmemory-policy", "redis3 is the outlier", "redis3 is the anomaly", "redis3 is rejecting writes"]
     look_alike_of: 2
 
 # Suggested run order - avoids early contamination, clusters look-alike

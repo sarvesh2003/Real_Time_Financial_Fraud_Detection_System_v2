@@ -1,27 +1,3 @@
-"""
-CLI entry point for the evidence-driven incident investigator.
-
-Usage:
-    venv/Scripts/python.exe run.py ["optional trigger text"]
-
-With no argument, uses the same zero-hint trigger phrase used throughout
-the manual ceiling-check trials, for consistency with the corpus.
-
-Eval-harness env vars (all optional - ad-hoc runs work with none of them set):
-    RUN_TAG       - label for this run, e.g. "fault02_kaggle". Controls the
-                    trace/result filenames so parallel runs (Kaggle vs local)
-                    never collide. Defaults to the timestamped INC-<ts> id
-                    used before the harness existed.
-    RESULTS_DIR   - directory to write trace.jsonl + result.json into.
-                    Defaults to agent/traces/ (old behavior) if unset.
-    ENV_LABEL     - human label for the environment (e.g. "kaggle-qwen14b",
-                    "local-qwen9b") - stored verbatim in result.json for the
-                    eval's per-environment aggregation. Defaults to LLM_PROVIDER.
-    FAULT_ID, FAULT_FAMILY, FAULT_NAME - identify which injected fault this
-                    run investigated, for the grading script to look up the
-                    right rubric entry. Blank if unset (ad-hoc runs).
-"""
-
 import asyncio
 import json
 import os
@@ -48,75 +24,47 @@ load_dotenv(REPO_ROOT / ".env")
 
 DEFAULT_TRIGGER = "Something seems off with the fraud pipeline, can you investigate?"
 
-# Default provider is NVIDIA; set LLM_PROVIDER=ollama to test the self-hosted
-# gemma4:e2b-it-qat / qwen3.5 models over Tailscale instead, or
-# LLM_PROVIDER=groq for a fast, generous-quota hosted option (gpt-oss-20b by
-# default - confirmed real tool-calling + structured-output support). Kept as
-# an env-var switch, purely additive, so comparing providers/models never
-# requires touching code - existing ollama/nvidia paths are untouched.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "nvidia")
+LLM_PROVIDER = "ollama"
+MODEL_ID = os.environ.get("OLLAMA_MODEL", "qwen2.5:32b-instruct")
+LLM_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "")
+LLM_API_KEY = "ollama"
 
-if LLM_PROVIDER == "ollama":
-    MODEL_ID = os.environ.get("OLLAMA_MODEL", "gemma4:e2b-it-qat")
-    LLM_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://100.103.190.22:11434/v1")
-    LLM_API_KEY = "ollama"  # unchecked by Ollama, but the SDK requires a non-empty string
-elif LLM_PROVIDER == "groq":
-    MODEL_ID = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
-    LLM_BASE_URL = "https://api.groq.com/openai/v1"
-    LLM_API_KEY = os.environ.get("GROQ_API_KEY", "")
-else:
-    MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
-    LLM_BASE_URL = "https://integrate.api.nvidia.com/v1"
-    LLM_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+if not LLM_BASE_URL:
+    raise RuntimeError("OLLAMA_BASE_URL must be set to the current Kaggle ngrok URL (ending in /v1)")
 
 RUN_TAG = os.environ.get("RUN_TAG") or f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", AGENT_DIR / "traces"))
-ENV_LABEL = os.environ.get("ENV_LABEL", LLM_PROVIDER)
+ENV_LABEL = os.environ.get("ENV_LABEL", "kaggle-qwen32b")
 FAULT_ID = os.environ.get("FAULT_ID", "")
 FAULT_FAMILY = os.environ.get("FAULT_FAMILY", "")
 FAULT_NAME = os.environ.get("FAULT_NAME", "")
 RETRIEVAL_MODE = os.environ.get("RETRIEVAL_MODE", "on").strip().lower()
 
 
-def _query_ollama_vram(base_url: str) -> dict | None:
-    """
-    Ollama's /api/ps reports, per currently-loaded model, its total size and
-    how much of that is resident in GPU VRAM (size_vram) - the closest thing
-    Ollama exposes to a vLLM-style memory metric. Returns None on any failure
-    (wrong provider, model not loaded, network hiccup) rather than raising -
-    this is bookkeeping for the eval's cost metrics, not something that
-    should ever fail an investigation run.
-    """
-    if LLM_PROVIDER != "ollama":
-        return None
+def query_ollama_vram(base_url: str) -> dict | None:
     try:
         ps_url = base_url.rsplit("/v1", 1)[0] + "/api/ps"
         resp = requests.get(ps_url, timeout=10)
         data = resp.json()
-        for m in data.get("models", []):
-            if m.get("model") == MODEL_ID or m.get("name") == MODEL_ID:
+        for model_entry in data.get("models", []):
+            if model_entry.get("model") == MODEL_ID or model_entry.get("name") == MODEL_ID:
                 return {
-                    "size_bytes": m.get("size"),
-                    "size_vram_bytes": m.get("size_vram"),
-                    "vram_fraction": (m["size_vram"] / m["size"]) if m.get("size") else None,
+                    "size_bytes": model_entry.get("size"),
+                    "size_vram_bytes": model_entry.get("size_vram"),
+                    "vram_fraction": (
+                        model_entry["size_vram"] / model_entry["size"] if model_entry.get("size") else None
+                    ),
                 }
-    except Exception:  # noqa: BLE001 - best-effort telemetry, never fail the run over it
+    except Exception:
         return None
     return None
 
 
-def _build_result(
+def build_result(
     trigger: str, final_state: dict | None, wall_clock_s: float,
     status: str, error_type: str = "", traceback_tail: str = "",
     vram_pre: dict | None = None, vram_post: dict | None = None,
 ) -> dict:
-    """
-    Flattens a completed (or crashed) run into the eval harness's per-run
-    schema - one flat dict, no nesting beyond one level, so results.csv can
-    be built by loading every result.json into a DataFrame with no
-    per-field special-casing. See personal-notes/implementation-logs.md
-    (eval design step) for the full field rationale.
-    """
     result: dict = {
         "run_id": RUN_TAG,
         "fault_id": FAULT_ID,
@@ -137,7 +85,6 @@ def _build_result(
     }
 
     if final_state is None:
-        # Crashed before the graph produced any state at all.
         result.update({
             "calls_used": None, "budget_exhausted": None,
             "llm_calls": 0, "llm_ms_total": 0.0, "tool_ms_total": 0.0,
@@ -148,7 +95,7 @@ def _build_result(
             "tool_errors": 0, "hallucinated_tool_calls": 0, "empty_result_calls": 0,
             "root_cause_id": None, "summary": "", "reasoning": "",
             "confidence": None, "model_self_reported_confidence": None,
-            "confidence_was_downgraded": None, "cited_evidence_indices": [],
+            "confidence_was_downgraded": None, "downgrade_reason": None, "cited_evidence_indices": [],
             "distinct_supporting_tools": [], "n_cited": 0,
             "cited_baseline_fraction": None, "evidence_groundedness": None,
         })
@@ -176,14 +123,6 @@ def _build_result(
         if valid_indices else None
     )
 
-    # Evidence groundedness: the conclude prompt's own GROUNDING RULE says
-    # every identifier in the summary must appear verbatim in the evidence
-    # log. Checking this programmatically doesn't require human grading -
-    # but a raw substring check fails on trivial formatting differences
-    # (evidence renders "maxmemory = 5242880", not "maxmemory=5242880";
-    # "redis2/redis3" vs "redis2, redis3") and lets "redis1" false-match
-    # inside "redis10" - so tokenize BOTH sides on non-alphanumeric
-    # boundaries and compare token sets, not raw strings.
     summary = conclusion.get("summary", "") or ""
     evidence_blob = " ".join(str(e.get("result", "")) for e in evidence_log)
     evidence_token_set = set(re.findall(r"[A-Za-z0-9_.-]+", evidence_blob))
@@ -219,6 +158,7 @@ def _build_result(
         "confidence": conclusion.get("confidence"),
         "model_self_reported_confidence": conclusion.get("model_self_reported_confidence"),
         "confidence_was_downgraded": conclusion.get("confidence") != conclusion.get("model_self_reported_confidence"),
+        "downgrade_reason": conclusion.get("downgrade_reason"),
         "cited_evidence_indices": valid_indices,
         "distinct_supporting_tools": conclusion.get("distinct_supporting_tools", []),
         "n_cited": len(valid_indices),
@@ -238,7 +178,7 @@ async def main() -> None:
     result_path = RESULTS_DIR / f"{RUN_TAG}.result.json"
     trace_path = RESULTS_DIR / f"{RUN_TAG}.trace.jsonl"
 
-    vram_pre = _query_ollama_vram(LLM_BASE_URL)
+    vram_pre = query_ollama_vram(LLM_BASE_URL)
     wall_t0 = time.monotonic()
     final_state: dict | None = None
     status, error_type, tb_tail = "completed", "", ""
@@ -254,12 +194,6 @@ async def main() -> None:
             max_tokens=8192,
         )
         if "qwen" in MODEL_ID.lower():
-            # Qwen3.5 thinks by default and can exhaust max_tokens on longer
-            # prompts before ever writing the answer (finish_reason "length",
-            # empty content). extra_body={"think": False} doesn't fully stop
-            # this on longer prompts, but reasoning_effort="none" does - verified
-            # against the actual failing repro. Scoped to Qwen only, since Gemma
-            # never needed this. See implementation-logs.md.
             llm_kwargs["reasoning_effort"] = "none"
         llm = ChatOpenAI(**llm_kwargs)
 
@@ -270,13 +204,6 @@ async def main() -> None:
                 "transport": "stdio",
                 "command": str(mcp_python),
                 "args": [str(mcp_server)],
-                # Without this, the MCP SDK spawns server.py with only a 12-var
-                # Windows allowlist (see mcp.client.stdio.get_default_environment),
-                # not the real environment - and _run_compose()'s docker subprocess
-                # inherits that same restricted env, which breaks Docker's CLI
-                # plugin resolution for "compose" (surfaces as a confusing
-                # "unknown shorthand flag: 'f' in -f" error). Same fix already
-                # used in mcp-server/test_client.py (Step 5a).
                 "env": dict(os.environ),
             }
         })
@@ -298,12 +225,6 @@ async def main() -> None:
         }
 
         print(f"\nTrigger: {trigger}\n")
-        # Streaming (not .ainvoke) so that if a later node raises - an LLM
-        # API error after retries, the tunnel dropping mid-run - everything
-        # gathered by every node that DID complete is still in `final_state`
-        # when the except/finally below runs. .ainvoke only returns a value
-        # on a clean finish, so a crash three-quarters through a 15-call
-        # investigation would otherwise discard all of it.
         async for step_state in graph.astream(initial_state, config={"recursion_limit": 100}, stream_mode="values"):
             final_state = step_state
 
@@ -313,7 +234,7 @@ async def main() -> None:
         print(json.dumps(final_state["conclusion"], indent=2))
         print(f"\nTool calls used: {final_state['calls_used']} / {TOOL_CALL_BUDGET}")
 
-    except Exception as e:  # noqa: BLE001 - a one-shot eval run must never lose data to an unhandled crash
+    except Exception as e:
         status = "crashed"
         error_type = type(e).__name__
         tb_tail = "".join(traceback.format_exception(e))[-4000:]
@@ -321,7 +242,7 @@ async def main() -> None:
 
     finally:
         wall_clock_s = time.monotonic() - wall_t0
-        vram_post = _query_ollama_vram(LLM_BASE_URL)
+        vram_post = query_ollama_vram(LLM_BASE_URL)
 
         header = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -339,7 +260,7 @@ async def main() -> None:
             for event in (final_state or {}).get("trace", []):
                 f.write(json.dumps(event) + "\n")
 
-        result = _build_result(
+        result = build_result(
             trigger, final_state, wall_clock_s, status, error_type, tb_tail,
             vram_pre, vram_post,
         )

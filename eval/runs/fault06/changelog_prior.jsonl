@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-11T02:27:00Z","family":"network","fault":"09_latency_injection","action":"inject"}
+{"timestamp":"2026-09-11T02:53:40Z","family":"network","fault":"09_latency_injection","action":"restore"}

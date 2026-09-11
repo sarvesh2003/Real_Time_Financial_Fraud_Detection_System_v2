@@ -1,0 +1,66 @@
+{
+  "run_id": "fault9_kaggle-qwen32b_ragoff",
+  "fault_id": "9",
+  "fault_family": "network",
+  "fault_name": "latency_injection",
+  "env_label": "kaggle-qwen32b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen2.5:32b-instruct",
+  "base_url": "https://b737-34-139-4-39.ngrok-free.app/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 398.4368955999962,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 29030214529,
+    "size_vram_bytes": 28090721892,
+    "vram_fraction": 0.9676374201071961
+  },
+  "calls_used": 1,
+  "budget_exhausted": false,
+  "llm_calls": 3,
+  "llm_ms_total": 373951.92360001965,
+  "tool_ms_total": 22869.92309996276,
+  "input_tokens_total": 11443,
+  "output_tokens_total": 201,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 15,
+  "baseline_config_diff_fired": false,
+  "tool_call_sequence": [
+    "list_recent_changes"
+  ],
+  "distinct_tools_used_total": [
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "none",
+  "summary": "The system appears to be running normally with all containers in a healthy state. No recent changes were listed within the last hour, and all metrics indicate that services are up and running without any anomalies.",
+  "reasoning": "The evidence shows that all containers are running and healthy, and the metrics indicate that all services are up. There were no recent changes listed within the last hour, and no specific anomalies were detected in the metrics or configurations. However, the lack of specific anomalies does not conclusively rule out any issues.",
+  "confidence": "inconclusive",
+  "model_self_reported_confidence": "inconclusive",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    0,
+    1,
+    2,
+    15
+  ],
+  "distinct_supporting_tools": [
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes"
+  ],
+  "n_cited": 4,
+  "cited_baseline_fraction": 0.75,
+  "evidence_groundedness": null,
+  "downgrade_reason": null
+}

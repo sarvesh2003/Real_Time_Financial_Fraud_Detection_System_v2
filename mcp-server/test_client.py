@@ -1,12 +1,3 @@
-"""
-Manual test client: spawns server.py as a subprocess over stdio and calls
-a tool on it, exactly like a real MCP client (e.g. Claude Desktop) would.
-Not part of the server itself — just for hand-testing each tool as it's built.
-
-Usage: python test_client.py <tool_name> <json_args>
-Example: python test_client.py query_logs '{"service": "kafka", "since": "10m"}'
-"""
-
 import asyncio
 import json
 import os
@@ -23,9 +14,6 @@ async def main():
     tool_name = sys.argv[1]
     args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
 
-    # StdioServerParameters does NOT inherit the full parent environment by
-    # default (only a minimal allowlist) — without this, the spawned server
-    # process can't find docker's CLI plugin directory correctly.
     params = StdioServerParameters(command=sys.executable, args=[str(SERVER_SCRIPT)], env=dict(os.environ))
 
     async with stdio_client(params) as (read, write):

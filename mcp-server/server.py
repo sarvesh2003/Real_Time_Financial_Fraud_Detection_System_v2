@@ -1,12 +1,3 @@
-"""
-MCP server exposing the fraud-detection pipeline's live telemetry to an
-investigating agent. Read-only: every tool here observes the stack, none
-of them mutate it.
-
-Transport: stdio (per the project plan — this runs as a subprocess of the
-agent on the same machine that has Docker CLI access).
-"""
-
 import hashlib
 import json
 import os
@@ -27,68 +18,40 @@ MAX_LOG_LINES = 500
 MAX_DATAPOINTS_PER_SERIES = 60
 MAX_SERIES = 25
 
-# Swappable base URL — pointing this at Grafana Cloud, Thanos, or any other
-# Prometheus-compatible endpoint later is a one-line config change, not a
-# code change.
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 
 _DURATION_RE = re.compile(r"(\d+)([smhd])")
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
-# Redis server-side config keys relevant to the fault catalog (fault 16 lives
-# here — wrong maxmemory-policy). Fixed allowlist, not "CONFIG GET *", so the
-# output stays short and focused on knobs this project actually exercises.
 _REDIS_SERVICES = {"redis1", "redis2", "redis3"}
 _REDIS_CONFIG_KEYS = ["maxmemory", "maxmemory-policy", "maxclients", "timeout", "appendonly"]
 
-# App-service env vars: only the prefixes this project actually sets are
-# shown, and anything that looks like a secret is dropped regardless of
-# prefix — e.g. geoip-updater's GEOIPUPDATE_LICENSE_KEY must never surface
-# here even if someone widens the prefix list later.
 _ENV_ALLOWED_PREFIXES = ("REDIS_", "KAFKA_", "GRPC_")
 _ENV_SECRET_MARKERS = ("KEY", "SECRET", "PASSWORD", "TOKEN", "LICENSE")
 
 mcp = FastMCP("fraud-pipeline-investigator")
 
 
-def _parse_duration_seconds(duration: str) -> int:
-    """Parses a simple Prometheus-style duration like '5m', '2h', '1h30m'."""
+def parse_duration_seconds(duration: str) -> int:
     matches = _DURATION_RE.findall(duration.strip())
     if not matches:
         raise ValueError(f"unrecognized duration format: '{duration}' (expected e.g. '5m', '2h', '1h30m')")
     return sum(int(value) * _DURATION_UNITS[unit] for value, unit in matches)
 
 
-def _run_compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+def run_compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     full_args = ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
     try:
         return subprocess.run(
             full_args,
             capture_output=True,
             text=True,
-            # Docker always writes container output as UTF-8, but `text=True`
-            # alone decodes with the host's default locale encoding (cp1252 on
-            # Windows) — a single non-cp1252 byte in a container's log output
-            # (e.g. from geoip-updater's MaxMind data) then throws mid-decode in
-            # subprocess's background reader thread, silently leaving `.stdout`
-            # as None. Force real UTF-8 and tolerate undecodable bytes instead
-            # of crashing on them.
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-            # Explicitly closed: when this server itself runs as a subprocess of
-            # an MCP client (the normal case), the child `docker` process can
-            # otherwise inherit a stdin pipe handle from further up the process
-            # chain and hang waiting on it, even though this command never
-            # actually reads from stdin.
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        # Surface this as evidence instead of an unhandled exception: the
-        # command connected fine but the target never replied within
-        # `timeout`s - e.g. a Redis node wedged by a long-running blocking
-        # command. A synthetic non-zero result lets every caller report this
-        # the same way it already reports any other command failure.
         return subprocess.CompletedProcess(
             args=full_args,
             returncode=124,
@@ -119,7 +82,7 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         Matching log lines, newest last, one per line. Capped at 500 lines —
         narrow the time window or add a grep filter if you need more precision.
     """
-    result = _run_compose("logs", "--no-color", f"--since={since}", "--", service)
+    result = run_compose("logs", "--no-color", f"--since={since}", "--", service)
 
     if result.returncode != 0:
         return f"ERROR: could not fetch logs for '{service}': {result.stderr.strip()}"
@@ -138,11 +101,6 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         lines = [line for line in lines if pattern.search(line)]
 
     if not lines:
-        # An empty result after filtering looks identical to "the service is
-        # silent" unless it says otherwise - and a filter that structurally
-        # can never match (see the level note above) would otherwise read as
-        # proof of health. Distinguish "your filter missed" from "there was
-        # nothing here at all" explicitly.
         if (level or grep) and raw_lines:
             return (
                 f"(0 of {len(raw_lines)} log lines in the last {since} matched your filter(s) - "
@@ -186,7 +144,7 @@ def get_metrics(promql: str, window: str) -> str:
         high-resolution dump.
     """
     try:
-        window_seconds = _parse_duration_seconds(window)
+        window_seconds = parse_duration_seconds(window)
     except ValueError as e:
         return f"ERROR: {e}"
 
@@ -209,14 +167,6 @@ def get_metrics(promql: str, window: str) -> str:
 
     results = payload["data"]["result"]
     if not results:
-        # Empty is genuinely ambiguous here: it can mean "never recorded /
-        # wrong name", or - for redis_*/kafka_* metrics specifically - the
-        # exporter is still up (its own up{job=...} stays 1, since the
-        # exporter process itself is fine) but has silently lost its
-        # connection to the real backend, so every other metric it serves
-        # just stops being recorded. Re-check over a much wider window so
-        # "never recorded" and "was recording, then stopped" read
-        # differently instead of both looking like plain silence.
         wide_seconds = max(window_seconds, 6 * 3600)
         wide_start = end - wide_seconds
         wide_step = max(5, wide_seconds // MAX_DATAPOINTS_PER_SERIES)
@@ -254,12 +204,6 @@ def get_metrics(promql: str, window: str) -> str:
             f"'nothing happening' from this gap.)"
         )
 
-    # An unscoped or broad query (e.g. discovering what metrics exist) can
-    # match hundreds of series - each with up to MAX_DATAPOINTS_PER_SERIES
-    # points, that adds up to multi-megabyte responses that MCP clients may
-    # silently truncate or reject. Cap the series count too, not just points
-    # per series, and say so clearly rather than returning a wall of data an
-    # agent might mistake for the complete picture.
     truncated = len(results) > MAX_SERIES
     results = results[:MAX_SERIES]
 
@@ -329,7 +273,7 @@ def get_container_state() -> str:
         restarting), a human-readable status string (e.g. "Up 24 minutes
         (healthy)"), and health check result if the container defines one.
     """
-    result = _run_compose("ps", "--all", "--format", "json")
+    result = run_compose("ps", "--all", "--format", "json")
 
     if result.returncode != 0:
         return f"ERROR: could not fetch container state: {result.stderr.strip()}"
@@ -361,22 +305,14 @@ def get_container_state() -> str:
     return "\n".join(lines)
 
 
-def _read_redis_config(service: str) -> str:
+def read_redis_config(service: str) -> str:
     lines = []
     for key in _REDIS_CONFIG_KEYS:
-        result = _run_compose("exec", "-T", "--", service, "redis-cli", "CONFIG", "GET", key)
+        result = run_compose("exec", "-T", "--", service, "redis-cli", "CONFIG", "GET", key)
         if result.returncode != 0:
             lines.append(f"{key}: ERROR ({result.stderr.strip()})")
             continue
         out_lines = result.stdout.strip().splitlines()
-        # redis-cli CONFIG GET <key> replies with two lines: the key name
-        # echoed back, then the value. But redis-cli exits 0 even when the
-        # *server* refuses the connection or replies with an error (e.g.
-        # "ERR max number of clients + cluster connections reached") - that comes back as a single
-        # line, not the normal two-line reply. Surface it verbatim instead of
-        # silently reporting "(no value)", which would misrepresent a live
-        # connection failure as an empty/unset config - exactly the kind of
-        # evidence a maxclients-exhaustion fault needs to be visible through.
         if len(out_lines) >= 2:
             value = out_lines[1]
         elif out_lines:
@@ -387,16 +323,10 @@ def _read_redis_config(service: str) -> str:
     return "\n".join(lines)
 
 
-def _read_container_env_config(service: str) -> str:
-    ps = _run_compose("ps", "-q", "--", service)
+def read_container_env_config(service: str) -> str:
+    ps = run_compose("ps", "-q", "--", service)
     if ps.returncode != 0:
         return f"ERROR: could not list containers for '{service}': {ps.stderr.strip()}"
-    # A scaled service (e.g. go-enricher with N replicas) returns one
-    # container ID per line. All replicas share identical env config (same
-    # image, same compose `environment:` block), so the first one is enough
-    # - but without splitting, all N IDs get jammed into a single malformed
-    # `docker inspect` argument and the call fails for every replica count
-    # other than 1.
     container_ids = ps.stdout.strip().splitlines()
     if not container_ids:
         return f"ERROR: no running container found for service '{service}'"
@@ -451,8 +381,8 @@ def read_config(service: str) -> str:
         settings — anything that looks like a secret is always excluded.
     """
     if service in _REDIS_SERVICES:
-        return _read_redis_config(service)
-    return _read_container_env_config(service)
+        return read_redis_config(service)
+    return read_container_env_config(service)
 
 
 @mcp.tool()
@@ -485,7 +415,7 @@ def list_recent_changes(window: str) -> str:
     for the real, current one.
     """
     try:
-        window_seconds = _parse_duration_seconds(window)
+        window_seconds = parse_duration_seconds(window)
     except ValueError as e:
         return f"ERROR: {e}"
 
@@ -509,12 +439,6 @@ def list_recent_changes(window: str) -> str:
                 continue
             if ts.timestamp() < cutoff:
                 continue
-            # Deliberately do NOT expose family/fault here - this tool tells the
-            # agent "something was deliberately changed," not "here is the exact
-            # test-fixture name of what changed" (that would just hand over the
-            # answer to the very thing the agent is supposed to diagnose). The
-            # hash is stable per family/fault so the agent can still notice "this
-            # same thing was toggled twice" without ever seeing what it's called.
             change_id = hashlib.sha256(
                 f"{entry.get('family', '?')}/{entry.get('fault', '?')}".encode()
             ).hexdigest()[:8]

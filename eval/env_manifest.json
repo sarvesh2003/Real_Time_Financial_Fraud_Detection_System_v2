@@ -1,22 +1,14 @@
 {
-  "_comment": "Fill in base_url values right before running (Kaggle's ngrok URL changes every session). This file is written once before fault 1, not touched during the run.",
+  "_comment": "Fill in base_url values right before running (Kaggle's ngrok URL changes every session). This file is written once before a fault sweep, not touched during the run.",
   "written_at": "REPLACE_BEFORE_RUN",
   "environments": {
-    "kaggle-qwen14b": {
+    "kaggle-qwen32b": {
       "provider": "ollama",
-      "model_id": "qwen2.5:14b-instruct",
+      "model_id": "qwen2.5:32b-instruct",
       "base_url": "REPLACE_WITH_CURRENT_NGROK_URL/v1",
       "context_window": 32768,
       "temperature": 0.2,
-      "hosted_on": "Kaggle T4/P100 GPU notebook, tunneled via ngrok"
-    },
-    "local-qwen9b": {
-      "provider": "ollama",
-      "model_id": "qwen3.5:9b",
-      "base_url": "http://100.103.190.22:11434/v1",
-      "context_window": 4096,
-      "temperature": 0.2,
-      "hosted_on": "local/Tailscale-connected machine"
+      "hosted_on": "Kaggle T4 x2 GPU notebook, tunneled via ngrok"
     },
     "claude-desktop": {
       "provider": "anthropic",
