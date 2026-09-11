@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-10T20:10:50Z","family":"redis","fault":"01_node_stopped","action":"inject"}
+{"timestamp":"2026-09-10T20:40:01Z","family":"redis","fault":"01_node_stopped","action":"restore"}

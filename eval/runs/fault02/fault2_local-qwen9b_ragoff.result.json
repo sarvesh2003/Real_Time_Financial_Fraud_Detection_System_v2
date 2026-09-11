@@ -1,0 +1,59 @@
+{
+  "run_id": "fault2_local-qwen9b_ragoff",
+  "fault_id": "2",
+  "fault_family": "redis",
+  "fault_name": "eviction_storm",
+  "env_label": "local-qwen9b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen3.5:9b",
+  "base_url": "http://100.103.190.22:11434/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 140.1017479000002,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 5490081790,
+    "size_vram_bytes": 5490081790,
+    "vram_fraction": 1.0
+  },
+  "calls_used": 0,
+  "budget_exhausted": false,
+  "llm_calls": 2,
+  "llm_ms_total": 107843.07040000567,
+  "tool_ms_total": 29303.380099969218,
+  "input_tokens_total": 3946,
+  "output_tokens_total": 1537,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 16,
+  "baseline_config_diff_fired": true,
+  "tool_call_sequence": [],
+  "distinct_tools_used_total": [
+    "config_diff",
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "redis-cluster-full-coverage-failure",
+  "summary": "The entire Redis cluster entered a CLUSTERDOWN state because the default cluster-require-full-coverage setting was active and a single node failure caused slot coverage to drop below 100%. This configuration prevents partial degradation, causing all keys to become unavailable when any master goes down.",
+  "reasoning": "The evidence log explicitly states that with cluster-require-full-coverage=yes (the unmodified default), losing any single node takes the entire cluster down for every key. The observed CLUSTERDOWN error is a direct consequence of this configuration combined with a node failure, rather than a misconfiguration of maxmemory or other settings.",
+  "confidence": "best_guess",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": true,
+  "cited_evidence_indices": [
+    1
+  ],
+  "distinct_supporting_tools": [
+    "list_recent_changes"
+  ],
+  "n_cited": 1,
+  "cited_baseline_fraction": 1.0,
+  "evidence_groundedness": null
+}

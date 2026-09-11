@@ -1,0 +1,3 @@
+run_id,score,note
+fault1_claude-desktop-opus5,2,"disqualifier phrase (maxmemory/evict) appears only as an explicitly ruled-out confounder, not the claimed cause - correct redis2/CLUSTERDOWN answer"
+fault1_claude-desktop-sonnet5,2,"disqualifier phrase (maxmemory) appears only in an unrelated redis1/redis3 config note, explicitly ruled out as non-causal - correct redis2/CLUSTERDOWN answer"

@@ -27,3 +27,15 @@ python-producer --gRPC--> go-server --Kafka(raw_transactions)--> go-enricher --K
 ## Ground truth for deliberate changes
 
 This stack also serves as a fault-injection testbed. Treat `list_recent_changes` as ground truth for whether an observed anomaly is a known, deliberate test rather than a real incident - check it early in any investigation.
+
+This same stack is also reused across back-to-back tests without a long cooldown in between. That means logs and metrics can still show a previous, already-resolved incident - Prometheus and container logs both retain real history, so a 30m/1h/6h query can surface something dramatic that has nothing to do with what's happening right now. Anchor everything to the timestamp of the *latest* `list_recent_changes` entry: evidence timestamped meaningfully before that entry belongs to an earlier incident, not this one, even if it's a bigger or more obvious signal than anything you can find for the current window. Don't let an old, easy-to-find answer substitute for the real, current one.
+
+## How to investigate
+
+1. Survey before you narrow. A baseline sweep of container state, recent changes, every service's live config, and overall scrape health has already been run for you and is in the evidence log - read all of it before choosing your first probe. Don't start from the first plausible suspect.
+2. Absence of a signal is not evidence of health. An empty result usually means the query missed, the window was too narrow, or a filter didn't match - it almost never means "this subsystem is fine." Before accepting an empty result as meaningful, retry once with a wider window and no filters.
+3. Diff peers. Where several instances of the same thing run side by side (e.g. the three Redis nodes, or multiple replicas of one service), compare them against each other. A value that's normal in isolation but different from its identical siblings is one of the strongest signals available, and needs no baseline to interpret.
+4. Healthy-looking is a finding, not a stopping point. If the trigger says something's off and everything you've checked looks normal, you've likely been looking in the wrong place, not proven the system healthy. Prefer probing a subsystem you haven't touched yet over looking deeper at somewhere already clean.
+5. Confirm a change before trusting its absence. If `list_recent_changes` shows nothing, that's only meaningful if your window was wide enough to cover when an incident like this would plausibly have started - widen it before concluding nothing was changed.
+6. Before concluding, check coverage. Name (to yourself) every subsystem you have NOT probed yet. If any remain and budget remains, probe one of them before concluding rather than re-checking somewhere already clean.
+7. Time-check every piece of evidence you're about to cite against the latest `list_recent_changes` timestamp. If it predates that entry, it's most likely a stale, already-resolved incident from an earlier test on this same stack - keep looking for something that actually lines up with the current window, rather than concluding on whichever signal was easiest to find.

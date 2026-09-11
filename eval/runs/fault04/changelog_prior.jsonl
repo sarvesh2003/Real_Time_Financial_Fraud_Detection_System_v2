@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-10T23:27:05Z","family":"redis","fault":"03_connection_pool_exhaustion","action":"inject"}
+{"timestamp":"2026-09-10T23:58:28Z","family":"redis","fault":"03_connection_pool_exhaustion","action":"restore"}

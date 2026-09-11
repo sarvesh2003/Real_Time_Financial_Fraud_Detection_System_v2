@@ -1,0 +1,70 @@
+{
+  "run_id": "fault2_kaggle-qwen14b_ragoff",
+  "fault_id": "2",
+  "fault_family": "redis",
+  "fault_name": "eviction_storm",
+  "env_label": "kaggle-qwen14b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen2.5:14b-instruct",
+  "base_url": "https://5034-136-107-189-89.ngrok-free.app/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 224.02280130000145,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 16157025238,
+    "size_vram_bytes": 16157025238,
+    "vram_fraction": 1.0
+  },
+  "calls_used": 6,
+  "budget_exhausted": false,
+  "llm_calls": 8,
+  "llm_ms_total": 187836.58660000947,
+  "tool_ms_total": 34032.94120001374,
+  "input_tokens_total": 55297,
+  "output_tokens_total": 1916,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 16,
+  "baseline_config_diff_fired": true,
+  "tool_call_sequence": [
+    "query_logs",
+    "query_logs",
+    "get_container_state",
+    "query_logs",
+    "query_logs",
+    "query_logs"
+  ],
+  "distinct_tools_used_total": [
+    "config_diff",
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "query_logs",
+    "read_config"
+  ],
+  "duplicate_calls": 2,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "redis2-redis3-misconfiguration",
+  "summary": "redis2 and redis3 were misconfigured with different settings compared to redis1, leading to potential inconsistencies in the Redis cluster. redis2 and redis3 had maxmemory set to 0 and maxmemory-policy set to noeviction, while redis1 had maxmemory set to 5242880 and maxmemory-policy set to allkeys-lru.",
+  "reasoning": "The evidence shows that redis2 and redis3 have different configurations compared to redis1, with redis2 and redis3 having maxmemory set to 0 and maxmemory-policy set to noeviction, while redis1 has maxmemory set to 5242880 and maxmemory-policy set to allkeys-lru. This misconfiguration can lead to inconsistencies and potential issues in the Redis cluster.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    15,
+    12,
+    13
+  ],
+  "distinct_supporting_tools": [
+    "config_diff",
+    "read_config"
+  ],
+  "n_cited": 3,
+  "cited_baseline_fraction": 1.0,
+  "evidence_groundedness": 1.0
+}

@@ -60,27 +60,42 @@ def _parse_duration_seconds(duration: str) -> int:
 
 
 def _run_compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), *args],
-        capture_output=True,
-        text=True,
-        # Docker always writes container output as UTF-8, but `text=True`
-        # alone decodes with the host's default locale encoding (cp1252 on
-        # Windows) — a single non-cp1252 byte in a container's log output
-        # (e.g. from geoip-updater's MaxMind data) then throws mid-decode in
-        # subprocess's background reader thread, silently leaving `.stdout`
-        # as None. Force real UTF-8 and tolerate undecodable bytes instead
-        # of crashing on them.
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        # Explicitly closed: when this server itself runs as a subprocess of
-        # an MCP client (the normal case), the child `docker` process can
-        # otherwise inherit a stdin pipe handle from further up the process
-        # chain and hang waiting on it, even though this command never
-        # actually reads from stdin.
-        stdin=subprocess.DEVNULL,
-    )
+    full_args = ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
+    try:
+        return subprocess.run(
+            full_args,
+            capture_output=True,
+            text=True,
+            # Docker always writes container output as UTF-8, but `text=True`
+            # alone decodes with the host's default locale encoding (cp1252 on
+            # Windows) — a single non-cp1252 byte in a container's log output
+            # (e.g. from geoip-updater's MaxMind data) then throws mid-decode in
+            # subprocess's background reader thread, silently leaving `.stdout`
+            # as None. Force real UTF-8 and tolerate undecodable bytes instead
+            # of crashing on them.
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            # Explicitly closed: when this server itself runs as a subprocess of
+            # an MCP client (the normal case), the child `docker` process can
+            # otherwise inherit a stdin pipe handle from further up the process
+            # chain and hang waiting on it, even though this command never
+            # actually reads from stdin.
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        # Surface this as evidence instead of an unhandled exception: the
+        # command connected fine but the target never replied within
+        # `timeout`s - e.g. a Redis node wedged by a long-running blocking
+        # command. A synthetic non-zero result lets every caller report this
+        # the same way it already reports any other command failure.
+        return subprocess.CompletedProcess(
+            args=full_args,
+            returncode=124,
+            stdout="",
+            stderr=f"TIMEOUT: no response within {timeout}s - the target accepted the "
+                    f"connection/command but never answered (may be blocked, not just slow)",
+        )
 
 
 @mcp.tool()
@@ -93,6 +108,11 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         since: How far back to look, in Docker's own format — a duration like
             "10m" or "2h", or an RFC3339 timestamp.
         level: Optional substring filter, e.g. "ERROR" or "WARNING". Case-insensitive.
+            NOTE: services in this stack log unstructured, unleveled text (plain
+            Go log.Printf, no severity prefix) - a level filter will often match
+            zero lines even when the service is logging heavily. If you get an
+            empty result back, retry without the filter before concluding the
+            service is quiet.
         grep: Optional regex filter applied to each log line. Case-insensitive.
 
     Returns:
@@ -104,7 +124,8 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
     if result.returncode != 0:
         return f"ERROR: could not fetch logs for '{service}': {result.stderr.strip()}"
 
-    lines = result.stdout.splitlines()
+    raw_lines = result.stdout.splitlines()
+    lines = raw_lines
 
     if level:
         lines = [line for line in lines if level.lower() in line.lower()]
@@ -117,7 +138,18 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         lines = [line for line in lines if pattern.search(line)]
 
     if not lines:
-        return "(no matching log lines)"
+        # An empty result after filtering looks identical to "the service is
+        # silent" unless it says otherwise - and a filter that structurally
+        # can never match (see the level note above) would otherwise read as
+        # proof of health. Distinguish "your filter missed" from "there was
+        # nothing here at all" explicitly.
+        if (level or grep) and raw_lines:
+            return (
+                f"(0 of {len(raw_lines)} log lines in the last {since} matched your filter(s) - "
+                f"the service DID log {len(raw_lines)} lines in that window, this is a filter "
+                f"miss, not silence. Retry without filters to see them.)"
+            )
+        return f"(no log lines at all for '{service}' in the last {since})"
 
     truncated = len(lines) > MAX_LOG_LINES
     lines = lines[-MAX_LOG_LINES:]
@@ -136,6 +168,15 @@ def get_metrics(promql: str, window: str) -> str:
     Args:
         promql: A PromQL expression, e.g. "redis_evicted_keys_total",
             "kafka_consumergroup_lag", or "rate(fraud_server_transactions_total[1m])".
+            Don't guess a metric name - a name that doesn't exist returns the
+            same empty result as a real metric with no data, so guessing can't
+            tell "not happening" apart from "not a real metric". Use
+            list_metric_names first if you're not certain a name exists.
+            To check several related metrics in one call, use a regex label
+            match like '{__name__=~"redis_(evicted_keys_total|memory_used_bytes)"}'
+            - a plain "A or B" expression drops the metric name from the
+            result and silently collapses to a single series, so prefer the
+            __name__=~ form whenever you want more than one metric at once.
         window: How far back to look, e.g. "5m", "15m", "1h".
 
     Returns:
@@ -168,7 +209,50 @@ def get_metrics(promql: str, window: str) -> str:
 
     results = payload["data"]["result"]
     if not results:
-        return "(no time series matched this query in the given window)"
+        # Empty is genuinely ambiguous here: it can mean "never recorded /
+        # wrong name", or - for redis_*/kafka_* metrics specifically - the
+        # exporter is still up (its own up{job=...} stays 1, since the
+        # exporter process itself is fine) but has silently lost its
+        # connection to the real backend, so every other metric it serves
+        # just stops being recorded. Re-check over a much wider window so
+        # "never recorded" and "was recording, then stopped" read
+        # differently instead of both looking like plain silence.
+        wide_seconds = max(window_seconds, 6 * 3600)
+        wide_start = end - wide_seconds
+        wide_step = max(5, wide_seconds // MAX_DATAPOINTS_PER_SERIES)
+        wide_results = []
+        try:
+            wide_resp = requests.get(
+                f"{PROMETHEUS_URL}/api/v1/query_range",
+                params={"query": promql, "start": wide_start, "end": end, "step": wide_step},
+                timeout=10,
+            )
+            wide_payload = wide_resp.json()
+            if wide_payload.get("status") == "success":
+                wide_results = wide_payload["data"]["result"]
+        except requests.RequestException:
+            pass
+
+        if not wide_results:
+            return (
+                "(no time series matched this query even over a 6h+ window - this "
+                "metric/label combination has genuinely never been recorded, not just "
+                "quiet right now)"
+            )
+
+        last_ts = max(
+            (float(pt[0]) for series in wide_results for pt in series.get("values", [])),
+            default=None,
+        )
+        age_minutes = (end - last_ts) / 60 if last_ts else None
+        return (
+            f"(no data in the last {window} - but this metric WAS recorded as recently as "
+            f"~{age_minutes:.0f} min ago, then stopped, rather than never existing. For "
+            f"redis_*/kafka_* metrics this usually means the exporter process is still up "
+            f"(its own up{{job=...}} stays 1) but lost its connection to the real backend - "
+            f"cross-check redis_up/kafka_brokers and get_container_state before concluding "
+            f"'nothing happening' from this gap.)"
+        )
 
     # An unscoped or broad query (e.g. discovering what metrics exist) can
     # match hundreds of series - each with up to MAX_DATAPOINTS_PER_SERIES
@@ -191,6 +275,45 @@ def get_metrics(promql: str, window: str) -> str:
     if truncated:
         output = f"[showing first {MAX_SERIES} of {len(payload['data']['result'])} matching series - narrow the query (e.g. add label matchers) for the rest]\n" + output
     return output
+
+
+@mcp.tool()
+def list_metric_names(job: str | None = None, contains: str | None = None) -> str:
+    """List the metric names that actually exist in Prometheus right now.
+
+    Use this before get_metrics rather than guessing a name - a guessed name
+    that doesn't exist returns the exact same empty result as a real metric
+    with no current data, so guessing alone can never tell those two cases
+    apart.
+
+    Args:
+        job: Optional scrape job to scope to, e.g. "redis", "kafka",
+            "go-server", "go-enricher". Omit to list every metric name
+            across the whole stack.
+        contains: Optional case-insensitive substring filter on the name.
+
+    Returns:
+        One metric name per line, sorted.
+    """
+    params = {}
+    if job:
+        params["match[]"] = f'{{job="{job}"}}'
+    try:
+        resp = requests.get(f"{PROMETHEUS_URL}/api/v1/label/__name__/values", params=params, timeout=10)
+        payload = resp.json()
+    except requests.RequestException as e:
+        return f"ERROR: could not reach Prometheus at {PROMETHEUS_URL}: {e}"
+
+    if payload.get("status") != "success":
+        return f"ERROR: Prometheus rejected the query: {payload.get('error', payload)}"
+
+    names = payload.get("data", [])
+    if contains:
+        names = [n for n in names if contains.lower() in n.lower()]
+
+    if not names:
+        return "(no metric names matched)"
+    return "\n".join(sorted(names))
 
 
 @mcp.tool()
@@ -247,8 +370,19 @@ def _read_redis_config(service: str) -> str:
             continue
         out_lines = result.stdout.strip().splitlines()
         # redis-cli CONFIG GET <key> replies with two lines: the key name
-        # echoed back, then the value.
-        value = out_lines[1] if len(out_lines) >= 2 else "(no value)"
+        # echoed back, then the value. But redis-cli exits 0 even when the
+        # *server* refuses the connection or replies with an error (e.g.
+        # "ERR max number of clients + cluster connections reached") - that comes back as a single
+        # line, not the normal two-line reply. Surface it verbatim instead of
+        # silently reporting "(no value)", which would misrepresent a live
+        # connection failure as an empty/unset config - exactly the kind of
+        # evidence a maxclients-exhaustion fault needs to be visible through.
+        if len(out_lines) >= 2:
+            value = out_lines[1]
+        elif out_lines:
+            value = f"(redis-cli did not return a value - raw reply: {out_lines[0]!r})"
+        else:
+            value = "(no value)"
         lines.append(f"{key} = {value}")
     return "\n".join(lines)
 
@@ -339,6 +473,16 @@ def list_recent_changes(window: str) -> str:
         the action (inject/restore). Does not name what the change was -
         this tells you *that* something was deliberately changed, not what
         to conclude from it.
+
+    IMPORTANT: this stack is reused across back-to-back tests without a long
+    cooldown between them. Metrics and logs both retain real history, so a
+    query_logs/get_metrics window can surface a previous, already-resolved
+    incident that has nothing to do with what's happening right now - and it
+    may look like a bigger, more obvious signal than the current one. Anchor
+    your investigation to the timestamp of the LATEST entry returned here:
+    evidence timestamped meaningfully before that entry belongs to an earlier
+    incident, not this one. Don't let an old, easy-to-find answer substitute
+    for the real, current one.
     """
     try:
         window_seconds = _parse_duration_seconds(window)

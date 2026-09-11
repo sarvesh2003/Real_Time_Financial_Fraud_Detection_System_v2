@@ -1,0 +1,73 @@
+{
+  "run_id": "fault2_kaggle-qwen14b_ragoff",
+  "fault_id": "2",
+  "fault_family": "redis",
+  "fault_name": "eviction_storm",
+  "env_label": "kaggle-qwen14b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen2.5:14b-instruct",
+  "base_url": "https://7a83-34-178-3-188.ngrok-free.app/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 479.61357940000016,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 16157025238,
+    "size_vram_bytes": 16157025238,
+    "vram_fraction": 1.0
+  },
+  "calls_used": 10,
+  "budget_exhausted": false,
+  "llm_calls": 12,
+  "llm_ms_total": 432388.8540000189,
+  "tool_ms_total": 44574.1312999744,
+  "input_tokens_total": 106314,
+  "output_tokens_total": 2085,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 16,
+  "baseline_config_diff_fired": true,
+  "tool_call_sequence": [
+    "query_logs",
+    "get_metrics",
+    "query_logs",
+    "query_logs",
+    "query_logs",
+    "get_metrics",
+    "query_logs",
+    "get_container_state",
+    "query_logs",
+    "list_recent_changes"
+  ],
+  "distinct_tools_used_total": [
+    "config_diff",
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "query_logs",
+    "read_config"
+  ],
+  "duplicate_calls": 2,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 6,
+  "root_cause_id": "redis1-maxmemory-misconfigured",
+  "summary": "redis1 has a maxmemory setting of 5MB, while redis2 and redis3 have no maxmemory limit. This misconfiguration causes redis1 to evict keys aggressively, leading to high redis_evicted_keys_total counts. The other nodes have no such eviction, indicating redis1 is the outlier.",
+  "reasoning": "redis1 has a maxmemory setting of 5MB, while redis2 and redis3 have no maxmemory limit. This causes redis1 to evict keys aggressively, as seen in the high redis_evicted_keys_total counts. The other nodes have no such eviction, indicating redis1 is the outlier. The misconfiguration is confirmed by both config_diff and get_metrics evidence.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    15,
+    21
+  ],
+  "distinct_supporting_tools": [
+    "config_diff",
+    "get_metrics"
+  ],
+  "n_cited": 2,
+  "cited_baseline_fraction": 0.5,
+  "evidence_groundedness": 1.0
+}

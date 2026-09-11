@@ -1,0 +1,62 @@
+{
+  "_instructions": "Fill this in by hand after the Claude Desktop chat finishes, using the mapping rules below - matches the automated result.json schema exactly, so grade.py needs no special-casing per environment.",
+  "_mapping_rules": {
+    "root_cause_id": "A short kebab-case slug YOU write summarizing Claude's stated cause",
+    "summary": "Paste Claude's final answer verbatim, untrimmed",
+    "calls_used": "Count of MCP tool invocations in the chat, excluding the baseline-sweep-equivalent calls at the start",
+    "distinct_supporting_tools": "Distinct tool names Claude explicitly cites as evidence for its conclusion",
+    "model_self_reported_confidence": "'inconclusive' if it says it can't determine the cause; 'confirmed' if it states the cause with no hedging; else 'best_guess'",
+    "confidence": "Apply the same rule as the code: downgrade 'confirmed' to 'best_guess' if distinct_supporting_tools has fewer than 2 entries"
+  },
+  "run_id": "fault2_claude-desktop-haiku4.5",
+  "fault_id": "2",
+  "fault_family": "redis",
+  "fault_name": "eviction_storm",
+  "env_label": "claude-desktop-haiku4.5",
+  "provider": "anthropic",
+  "model_id": "claude (desktop app)",
+  "status": "completed",
+  "calls_used": 8,
+  "root_cause_id": "redis-data-corruption-false-fraud-alerts",
+  "summary": "The fault injection at 20:56:38Z corrupted Redis data used by the fraud enricher to store historical transaction baselines and thresholds, causing the enricher to incorrectly flag all transactions as fraudulent due to corrupted comparison data.",
+  "reasoning": "Confidence: confirmed. Evidence sources: enricher logs showing corrupted Redis output formatting (concatenated city names), redis2 container recently restarted indicating cluster anomaly, simultaneous HIGH VELOCITY/HIGH AMOUNT/HIGH FREQUENCY alerts across all IPs (statistically impossible without data corruption), Redis metrics showing services connected but with garbled data serialization patterns.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [],
+  "distinct_supporting_tools": [
+    "query_logs",
+    "get_metrics"
+  ],
+  "n_cited": 2,
+  "cited_baseline_fraction": null,
+  "baseline_evidence_count": null,
+  "baseline_config_diff_fired": null,
+  "tool_call_sequence": [
+    "get_container_state",
+    "list_recent_changes",
+    "get_metrics",
+    "get_metrics",
+    "query_logs",
+    "query_logs",
+    "read_config",
+    "get_metrics"
+  ],
+  "distinct_tools_used_total": [
+    "get_container_state",
+    "list_recent_changes",
+    "get_metrics",
+    "query_logs",
+    "read_config"
+  ],
+  "duplicate_calls": null,
+  "tool_errors": null,
+  "hallucinated_tool_calls": null,
+  "empty_result_calls": null,
+  "wall_clock_s": null,
+  "llm_calls": null,
+  "input_tokens_total": null,
+  "output_tokens_total": null,
+  "vram_pre": null,
+  "vram_post": null
+}

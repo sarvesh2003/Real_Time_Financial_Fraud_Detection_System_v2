@@ -1,0 +1,62 @@
+{
+  "_instructions": "Fill this in by hand after the Claude Desktop chat finishes, using the mapping rules below - matches the automated result.json schema exactly, so grade.py needs no special-casing per environment.",
+  "_mapping_rules": {
+    "root_cause_id": "A short kebab-case slug YOU write summarizing Claude's stated cause",
+    "summary": "Paste Claude's final answer verbatim, untrimmed",
+    "calls_used": "Count of MCP tool invocations in the chat, excluding the baseline-sweep-equivalent calls at the start",
+    "distinct_supporting_tools": "Distinct tool names Claude explicitly cites as evidence for its conclusion",
+    "model_self_reported_confidence": "'inconclusive' if it says it can't determine the cause; 'confirmed' if it states the cause with no hedging; else 'best_guess'",
+    "confidence": "Apply the same rule as the code: downgrade 'confirmed' to 'best_guess' if distinct_supporting_tools has fewer than 2 entries"
+  },
+  "run_id": "fault1_claude-desktop-haiku4.5",
+  "fault_id": "1",
+  "fault_family": "redis",
+  "fault_name": "node_stopped",
+  "env_label": "claude-desktop-haiku4.5",
+  "provider": "anthropic",
+  "model_id": "claude (desktop app)",
+  "status": "completed",
+  "calls_used": 8,
+  "root_cause_id": "redis2-clusterdown",
+  "summary": "The deliberate fault injection shut down redis2 at 20:10:50 UTC, which caused the Redis cluster to mark itself as unavailable (CLUSTERDOWN), blocking all downstream services that depend on Redis for transaction deduplication, rate limiting, and fraud data enrichment.",
+  "reasoning": "Confidence: confirmed (two independent tool sources support it) - get_container_state confirmed redis2 exited 7 minutes ago, list_recent_changes confirmed a deliberate injection at a matching timestamp, and query_logs(go-server) showing CLUSTERDOWN confirmed cluster-level failure rather than just a single connection loss. Also checked redis1/redis3 configs to rule out misconfiguration as the root cause.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [],
+  "distinct_supporting_tools": [
+    "get_container_state",
+    "list_recent_changes",
+    "query_logs"
+  ],
+  "n_cited": 3,
+  "cited_baseline_fraction": null,
+  "baseline_evidence_count": null,
+  "baseline_config_diff_fired": null,
+  "tool_call_sequence": [
+    "get_container_state",
+    "list_recent_changes",
+    "query_logs",
+    "query_logs",
+    "query_logs",
+    "read_config",
+    "read_config",
+    "query_logs"
+  ],
+  "distinct_tools_used_total": [
+    "get_container_state",
+    "list_recent_changes",
+    "query_logs",
+    "read_config"
+  ],
+  "duplicate_calls": null,
+  "tool_errors": null,
+  "hallucinated_tool_calls": null,
+  "empty_result_calls": null,
+  "wall_clock_s": null,
+  "llm_calls": null,
+  "input_tokens_total": null,
+  "output_tokens_total": null,
+  "vram_pre": null,
+  "vram_post": null
+}

@@ -1,0 +1,281 @@
+# Pre-registered ground truth for the 15-fault eval, written BEFORE any run.
+# Committing this before execution is what makes the grading defensible -
+# see personal-notes/implementation-logs.md for the eval design rationale.
+#
+# Scoring (applied by eval/grade.py):
+#   2 = mechanism_any_of hit AND (mechanism_and_any_of hit, if present) AND
+#       target_any_of hit AND no disqualifier fired
+#   1 = right subsystem/family named, but mechanism missing or wrong specific
+#       instance named (a correctly-vague target like "a redis node" still
+#       counts as a full target hit, per the agent's own grounding rule -
+#       only a WRONG specific instance costs the target point)
+#   0 = a disqualifier fired, or an unrelated subsystem was named
+#  -1 = confidence == inconclusive and no root cause was claimed at all
+#       (tracked separately - counts as 0 for accuracy, NOT as a false
+#       positive for the false-confidence rate)
+#
+# liveness: continuous = fault stays live until explicitly restored.
+#           transient = fault self-resolves in seconds; re-inject per leg
+#           rather than holding one shared live state (see run_fault_eval.sh).
+# baseline_sufficiency: sufficient = the free baseline sweep alone contains
+#           the answer; hinted = sweep contains a clue but not the full
+#           answer; absent = sweep has nothing, the model must actively probe.
+
+faults:
+  - fault_id: 1
+    family: redis
+    split: indexed
+    script: redis/01_node_stopped.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["stopped", "exited", "down", "crash", "not running", "offline"]
+    # Script's real target is redis2 specifically (common.sh default) - redis1
+    # and redis3 are removed from valid targets; naming them is a WRONG
+    # instance, not a correctly-vague one, so it needs its own disqualifier.
+    target_any_of: ["redis2", "a redis node", "a redis cluster node", "one of the three masters", "redis cluster"]
+    disqualifiers:
+      - id: wrong_mechanism
+        any_of: ["evict", "maxmemory", "slow", "timeout", "packet loss", "cpu throttle", "paused"]
+      - id: wrong_node
+        any_of: ["redis1 is down", "redis3 is down", "redis1 stopped", "redis3 stopped", "redis1 is exited", "redis3 is exited", "redis1 has exited", "redis3 has exited"]
+    look_alike_of: 11
+
+  - fault_id: 2
+    family: redis
+    split: indexed
+    script: redis/02_eviction_storm.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["5242880", "5 mb", "5mb", "maxmemory", "memory cap", "memory limit"]
+    mechanism_and_any_of: ["evict", "allkeys-lru", "lru"]
+    target_any_of: ["redis1", "a redis node", "one of the redis", "one redis master", "a redis cluster node"]
+    disqualifiers:
+      # NOT bare "noeviction" - that's redis2/redis3's correct healthy config,
+      # which any correct answer legitimately names as the comparison baseline.
+      # Only phrases claiming noeviction/full-memory is itself the failure
+      # (fault 16's actual mechanism) count as confusion with that fault.
+      - id: confused_with_16
+        any_of: ["oom command not allowed", "writes rejected", "writes failing", "reject writes", "rejecting writes"]
+      # NOT bare "redis2"/"redis3" - every correct answer names them as the
+      # healthy peers being diffed against redis1. Only phrases that actually
+      # blame redis2/redis3 as the anomalous node count as the wrong target.
+      - id: wrong_node
+        any_of: ["redis2 is misconfigured", "redis2 has a misconfigured", "redis2's maxmemory", "redis2 is the outlier", "redis2 is the anomaly",
+                 "redis3 is misconfigured", "redis3 has a misconfigured", "redis3's maxmemory", "redis3 is the outlier", "redis3 is the anomaly"]
+    look_alike_of: 16
+
+  - fault_id: 3
+    family: redis
+    split: held_out_with_neighbor
+    script: redis/03_connection_pool_exhaustion.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["maxclients", "connection limit", "connections refused", "refusing connections", "max clients"]
+    target_any_of: ["redis1", "a redis node", "one of the redis"]
+    disqualifiers:
+      - id: confused_with_14
+        any_of: ["pool size", "client pool", "redis_pool_size"]
+      - id: confused_with_13
+        any_of: ["timeout too low", "dial timeout", "read timeout"]
+    look_alike_of: 14
+
+  - fault_id: 4
+    family: redis
+    split: held_out_with_neighbor
+    script: redis/04_slow_commands.sh
+    liveness: transient
+    baseline_sufficiency: absent
+    mechanism_any_of: ["slow command", "blocking command", "debug sleep", "blocked", "single-threaded", "event loop"]
+    # Bare "redis" would match almost any answer in a Redis-centric stack,
+    # making this point free - require an actual node reference.
+    target_any_of: ["redis node", "a redis instance", "redis cluster node", "one of the redis"]
+    disqualifiers:
+      - id: wrong_mechanism
+        any_of: ["down", "exited", "evict", "maxmemory", "oom", "network", "packet loss", "cpu throttle"]
+    look_alike_of: 9
+
+  - fault_id: 6
+    family: kafka
+    split: held_out_with_neighbor
+    script: kafka/06_rebalance_churn.sh
+    liveness: transient
+    baseline_sufficiency: hinted
+    mechanism_any_of: ["rebalance", "restart", "kicked out", "rejoining", "consumer group", "churn"]
+    target_any_of: ["go-enricher", "enricher", "consumer group"]
+    disqualifiers:
+      # Compound phrases, not a bare "redis" - a correct answer can
+      # legitimately mention redis in passing (enricher's cache lookups)
+      # without claiming it's the cause.
+      - id: wrong_mechanism
+        any_of: ["broker down", "redis is down", "redis is the cause", "redis failure", "malformed", "partition imbalance"]
+
+  - fault_id: 7
+    family: kafka
+    split: held_out_with_neighbor
+    script: kafka/07_partition_imbalance.sh
+    liveness: transient
+    baseline_sufficiency: absent
+    # Generic partition/kafka language alone ("partition lag looks uneven")
+    # isn't a real diagnosis - require it PLUS the specific same-key/skew
+    # signal that actually explains why one partition is hot.
+    mechanism_any_of: ["partition", "hot partition", "skew", "imbalance"]
+    mechanism_and_any_of: ["same user", "single key", "single user", "hot key", "skewed key", "repeated key"]
+    target_any_of: ["kafka", "raw_transactions", "a partition"]
+    disqualifiers:
+      - id: blames_replica_count
+        any_of: ["not enough replicas", "scale up consumers", "consumer count"]
+      - id: wrong_mechanism
+        any_of: ["redis is down", "redis failure", "malformed event", "network is the cause"]
+    # Rate-limiter bug (personal-notes/faults_and_descriptions.md) means a
+    # "rate limiting rejected a burst" answer is a real downstream effect of
+    # the same root cause, not a wrong answer - score 1 (partial), not 0.
+    partial_credit_any_of: ["rate limit", "rate-limited", "throttled the burst"]
+
+  - fault_id: 8
+    family: kafka
+    split: indexed
+    script: kafka/08_malformed_event.sh
+    liveness: transient
+    baseline_sufficiency: absent
+    mechanism_any_of: ["malformed", "garbage", "corrupt", "unmarshal", "parse error", "invalid payload", "bad message"]
+    target_any_of: ["go-enricher", "enricher", "raw_transactions", "kafka"]
+    disqualifiers:
+      - id: wrong_mechanism
+        any_of: ["redis is down", "redis failure", "network is the cause", "cpu throttle", "config drift"]
+
+  - fault_id: 9
+    family: network
+    split: indexed
+    script: network/09_latency_injection.sh
+    liveness: continuous
+    baseline_sufficiency: absent
+    mechanism_any_of: ["latency", "delay", "slow network", "200ms", "network delay"]
+    target_any_of: ["go-server", "network link", "grpc"]
+    disqualifiers:
+      # "calls to redis look slow" is a TRUE, expected downstream symptom of
+      # network latency on go-server's link - only disqualify a claim that
+      # redis ITSELF is the misconfigured/failing thing.
+      - id: confused_with_4
+        any_of: ["redis is misconfigured", "redis config issue", "redis maxmemory", "debug sleep on redis", "slow command on redis"]
+      - id: confused_with_12
+        any_of: ["cpu throttle", "cpu starved", "cpu quota"]
+    look_alike_of: 12
+
+  - fault_id: 10
+    family: network
+    split: held_out_with_neighbor
+    script: network/10_packet_loss.sh
+    liveness: continuous
+    baseline_sufficiency: absent
+    mechanism_any_of: ["packet loss", "dropped packets", "drops", "10%"]
+    target_any_of: ["go-server", "network interface", "outbound"]
+    disqualifiers:
+      - id: overconfident_single_dependency
+        any_of: ["redis is down", "redis is failing", "kafka is down"]
+    look_alike_of: 9
+
+  - fault_id: 11
+    family: network
+    split: indexed
+    script: network/11_container_paused.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["paused", "frozen"]
+    target_any_of: ["go-server", "the producer", "ingest path"]
+    disqualifiers:
+      - id: wrong_state
+        any_of: ["crashed", "exited", "stopped"]
+      - id: wrong_target
+        any_of: ["go-enricher", "producer is python-producer"]
+    look_alike_of: 1
+
+  - fault_id: 12
+    family: network
+    split: held_out_with_neighbor
+    script: network/12_cpu_throttle.sh
+    liveness: continuous
+    baseline_sufficiency: absent
+    evidence_reachable: indirect  # no cAdvisor/node-exporter; only rate(process_cpu_seconds_total) is visible
+    mechanism_any_of: ["cpu throttle", "cpu starved", "cpu quota", "cpu limit", "cpu-bound", "cpus=0.1"]
+    target_any_of: ["go-server"]
+    disqualifiers:
+      - id: confused_with_9
+        any_of: ["network delay", "latency injection", "packet loss"]
+    look_alike_of: 9
+
+  - fault_id: 13
+    family: config
+    split: held_out_no_neighbor
+    script: config/13_client_timeout_too_low.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    # Bare "timeout" would credit any answer that merely mentions timeouts
+    # (e.g. as a symptom of network latency, fault 9) without diagnosing
+    # the client's OWN misconfigured threshold - require the specific claim.
+    mechanism_any_of: ["1ms", "dial timeout", "read timeout", "write timeout", "client timeout", "timeout too low", "client-side timeout", "timeout is set too low"]
+    target_any_of: ["go-server", "redis client"]
+    disqualifiers:
+      - id: confused_with_3
+        any_of: ["maxclients", "server-side connection limit"]
+      - id: confused_with_15
+        any_of: ["retry", "backoff"]
+    look_alike_of: 4
+
+  - fault_id: 14
+    family: config
+    split: held_out_no_neighbor
+    script: config/14_pool_size_too_small.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["pool size", "connection pool", "pool capped", "redis_pool_size", "queue for a connection"]
+    target_any_of: ["go-server", "redis client"]
+    disqualifiers:
+      - id: confused_with_3
+        any_of: ["maxclients", "server-side"]
+      - id: confused_with_13
+        any_of: ["timeout too low"]
+    look_alike_of: 3
+
+  - fault_id: 15
+    family: config
+    split: held_out_no_neighbor
+    script: config/15_bad_retry_backoff.sh
+    liveness: continuous
+    baseline_sufficiency: sufficient
+    mechanism_any_of: ["retry", "backoff", "no backoff", "retries fire instantly", "pile-on", "hammered"]
+    target_any_of: ["go-server", "redis client"]
+    disqualifiers:
+      - id: overclaims_active_outage
+        any_of: ["currently causing an outage", "redis is down because of this"]
+    # No behavioral signal exists for this fault - it's latent. Flagging the
+    # anomaly while staying inconclusive on impact is the CORRECT calibrated
+    # answer, not a failure - score 1 (partial), not -1.
+    partial_credit_any_of: ["retry", "backoff", "anomalous config", "flagged the retry"]
+
+  - fault_id: 16
+    family: config
+    split: held_out_no_neighbor
+    script: config/16_wrong_maxmemory_policy.sh
+    liveness: continuous
+    baseline_sufficiency: hinted  # config_diff fires on maxmemory but NOT on policy (all 3 nodes share noeviction baseline)
+    mechanism_any_of: ["noeviction", "oom command not allowed", "writes rejected", "writes failing", "reject writes"]
+    target_any_of: ["redis1", "a redis node", "one of the redis"]
+    disqualifiers:
+      - id: confused_with_2
+        any_of: ["evict", "allkeys-lru", "eviction storm"]
+      - id: wrong_node
+        any_of: ["redis2", "redis3"]
+    look_alike_of: 2
+
+# Suggested run order - avoids early contamination, clusters look-alike
+# pairs so the discrimination comparison happens under similar system
+# state, and puts the two FLUSHALL-heavy faults (2, 16) last and adjacent.
+suggested_order: [11, 1, 4, 9, 10, 12, 6, 7, 8, 13, 14, 15, 3, 2, 16]
+
+contrast_pairs:
+  - [2, 16]    # evicting keys vs rejecting writes - same maxmemory cap, different policy
+  - [3, 14]    # server-side maxclients vs client-side pool size
+  - [9, 12]    # network latency vs CPU throttle - both "slow, no errors"
+  - [1, 11]    # stopped vs paused - both "throughput drops to zero"
+  - [13, 4]    # client gives up early vs server itself is genuinely slow
+  - [9, 10]    # steady latency vs lossy/retried connections

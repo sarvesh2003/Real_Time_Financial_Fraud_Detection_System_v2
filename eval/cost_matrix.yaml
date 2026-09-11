@@ -1,0 +1,29 @@
+# Pre-registered cost matrix, committed BEFORE any eval run - see
+# personal-notes/implementation-logs.md for the eval design discussion.
+# Units are engineer-minutes-equivalent; only the RATIOS between cells
+# matter for the resulting skill score, not the absolute numbers.
+#
+# skill_score = 1 - (mean_cost_of_system / mean_cost_of_always_abstain_policy)
+#   0 = system is no better than always answering "inconclusive"
+#   1 = perfect (every fault confirmed and correct)
+#   <0 = system is net harmful vs. just always deferring to a human
+#
+# confirmed & wrong is weighted far above everything else because of this
+# stack's actual topology: 3 Redis masters, 0 replicas,
+# cluster-require-full-coverage=yes - a confidently wrong diagnosis that
+# leads an on-call engineer to restart the wrong node can take the ENTIRE
+# cluster down, not just degrade it. The remediation is worse than the fault.
+
+cost_cells:
+  confirmed_correct: 0
+  best_guess_correct: 1
+  inconclusive: 3       # reference policy: human starts from scratch, no harm done
+  best_guess_wrong: 5
+  confirmed_wrong: 10
+
+# Sensitivity sweep - re-check the skill score's ranking across environments
+# at each of these confirmed_wrong values, holding all other cells fixed.
+# Report whether the ranking is stable across this whole range; if it is,
+# that's the answer to "you just picked numbers that made your system look
+# good."
+sensitivity_sweep_confirmed_wrong: [5, 10, 20]

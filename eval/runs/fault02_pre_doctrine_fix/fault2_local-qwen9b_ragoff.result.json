@@ -1,0 +1,63 @@
+{
+  "run_id": "fault2_local-qwen9b_ragoff",
+  "fault_id": "2",
+  "fault_family": "redis",
+  "fault_name": "eviction_storm",
+  "env_label": "local-qwen9b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen3.5:9b",
+  "base_url": "http://100.103.190.22:11434/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 109.95974469999783,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 5490081790,
+    "size_vram_bytes": 5490081790,
+    "vram_fraction": 1.0
+  },
+  "calls_used": 0,
+  "budget_exhausted": false,
+  "llm_calls": 2,
+  "llm_ms_total": 80026.96139999898,
+  "tool_ms_total": 27774.222599953646,
+  "input_tokens_total": 3725,
+  "output_tokens_total": 838,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 16,
+  "baseline_config_diff_fired": true,
+  "tool_call_sequence": [],
+  "distinct_tools_used_total": [
+    "config_diff",
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "redis-cluster-full-coverage-failure",
+  "summary": "The entire Redis cluster went down because a single node became unreachable, triggering the default 'cluster-require-full-coverage' setting which treats any missing node as a total failure. This caused all keys to become inaccessible, halting the go-server and go-enricher services.",
+  "reasoning": "The system architecture explicitly states that with cluster-require-full-coverage=yes (the default), losing any single node takes the entire cluster down for every key. The evidence shows a CLUSTERDOWN error, which is the specific failure mode described for this configuration when a node is lost. No other anomalies like high velocity or rate-limit bugs were present to explain the outage.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    1,
+    2,
+    3
+  ],
+  "distinct_supporting_tools": [
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "n_cited": 3,
+  "cited_baseline_fraction": 1.0,
+  "evidence_groundedness": null
+}

@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-10T20:56:38Z","family":"redis","fault":"02_eviction_storm","action":"inject"}
+{"timestamp":"2026-09-10T23:26:22Z","family":"redis","fault":"02_eviction_storm","action":"restore"}

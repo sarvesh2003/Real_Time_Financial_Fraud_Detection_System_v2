@@ -1,0 +1,63 @@
+{
+  "run_id": "fault1_local-qwen9b_ragoff",
+  "fault_id": "1",
+  "fault_family": "redis",
+  "fault_name": "node_stopped",
+  "env_label": "local-qwen9b",
+  "retrieval_mode": "off",
+  "provider": "ollama",
+  "model_id": "qwen3.5:9b",
+  "base_url": "http://100.103.190.22:11434/v1",
+  "trigger": "Something seems off with the fraud pipeline, can you investigate?",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 84.52643589999934,
+  "vram_pre": null,
+  "vram_post": {
+    "size_bytes": 5490081790,
+    "size_vram_bytes": 5490081790,
+    "vram_fraction": 1.0
+  },
+  "calls_used": 0,
+  "budget_exhausted": false,
+  "llm_calls": 2,
+  "llm_ms_total": 54366.72749998979,
+  "tool_ms_total": 26261.614499991992,
+  "input_tokens_total": 3725,
+  "output_tokens_total": 710,
+  "truncated_retries": 0,
+  "baseline_evidence_count": 15,
+  "baseline_config_diff_fired": true,
+  "tool_call_sequence": [],
+  "distinct_tools_used_total": [
+    "config_diff",
+    "get_container_state",
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 5,
+  "root_cause_id": "redis-cluster-down-on-single-node-failure",
+  "summary": "The entire Redis cluster entered a CLUSTERDOWN state because the configuration 'cluster-require-full-coverage=yes' was active, causing the system to reject all requests when any single node (e.g., redis1) failed. This is consistent with the architecture where zero replicas are configured and the default setting mandates full coverage for operations.",
+  "reasoning": "The evidence shows that losing a single Redis node triggers a total cluster shutdown rather than partial degradation, which is the expected behavior when 'cluster-require-full-coverage=yes' is set with zero replicas. The system's inability to serve requests during a single-node failure confirms this configuration constraint as the root cause.",
+  "confidence": "confirmed",
+  "model_self_reported_confidence": "confirmed",
+  "confidence_was_downgraded": false,
+  "cited_evidence_indices": [
+    1,
+    2,
+    3
+  ],
+  "distinct_supporting_tools": [
+    "get_metrics",
+    "list_recent_changes",
+    "read_config"
+  ],
+  "n_cited": 3,
+  "cited_baseline_fraction": 1.0,
+  "evidence_groundedness": 1.0
+}
