@@ -1,6 +1,6 @@
 # Eval summary
 
-Total graded runs: 32
+Total graded runs: 38
 
 
 ## claude-desktop-haiku4.5  (n=5)
@@ -102,75 +102,79 @@ Reliability table:
 - Mean tokens in/out: None/None
 - Tokens/sec: n/a
 
-## kaggle-qwen14b (rag=off)  (n=4)
+## kaggle-qwen14b (rag=off)  (n=7)
 
-- Raw accuracy: 2/4 (50%, Wilson 95% CI 15%-85%)
-- Coverage (confirmed): 25% (CI 5%-70%)
+- Raw accuracy: 2/7 (29%, Wilson 95% CI 8%-64%)
+- Coverage (confirmed): 14% (CI 3%-51%)
 - Selective accuracy (of confirmed, % actually right): 100%
-- **False-confidence rate: 0/4 (0%, CI 0%-49%)**
+- **False-confidence rate: 0/7 (0%, CI 0%-35%)**
 - Confirmed-recall (of correct answers, % flagged confident): 50%
-- Inconclusive (honest abstain) count: 1 (of which 0 were parse failures, not a real abstention decision)
-- Crashed runs (n=4 includes these; priced worse than inconclusive in the cost score below): 0
+- Inconclusive (honest abstain) count: 2 (of which 0 were parse failures, not a real abstention decision)
+- Crashed runs (n=7 includes these; priced worse than inconclusive in the cost score below): 0
 
 Reliability table:
   - confirmed: n=1, correct=1, accuracy=100%
-  - best_guess: n=2, correct=1, accuracy=50%
-  - inconclusive: n=1, correct=0, accuracy=0%
-- Confidence-downgrade ablation: any gate fired on 0/4 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 0% vs WITH the gate(s) = 0%
+  - best_guess: n=4, correct=1, accuracy=25%
+  - inconclusive: n=2, correct=0, accuracy=0%
+- Confidence-downgrade ablation: any gate fired on 0/7 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 0% vs WITH the gate(s) = 0%
 
-- Contrast-pair accuracy (strict, both must be correct): 0/0 (n/a)
+- Contrast-pair accuracy (strict, both must be correct): 0/1 (0%)
+    - fault 13 vs 4: FAIL (scores -1.0/-1.0)
 
 - Retrieval, by split (NOT pooled - each split has a different correct behavior):
+    - held_out_no_neighbor (n=1): correct behavior is retrieving NOTHING relevant - false-positive hits: 0/1
     - held_out_with_neighbor: n/a
     - indexed: n/a
 
-- Cost-weighted skill score (confirmed-wrong=10x): 0.25
-  - Sensitivity sweep: 5x=0.25, 10x=0.25, 20x=0.25
+- Cost-weighted skill score (confirmed-wrong=10x): -0.05
+  - Sensitivity sweep: 5x=-0.05, 10x=-0.05, 20x=-0.05
 - Scripted-baseline-only accuracy (on baseline-sufficient faults): 0%
 
 - Mean calls-to-resolution (correct answers only): 12.5
-- Mean fraction of cited evidence from the free baseline sweep: 54%
-- Mean evidence groundedness: 100%
-- Duplicate/tool-error/hallucination rate per run: 6.25/0.0/0.0
+- Mean fraction of cited evidence from the free baseline sweep: 40%
+- Mean evidence groundedness: 95%
+- Duplicate/tool-error/hallucination rate per run: 5.857142857142857/0.0/0.0
 
-- Mean wall-clock per investigation: 414.0s
-- Mean tokens in/out: 143198.0/2291.5
-- Tokens/sec: 6.2
+- Mean wall-clock per investigation: 498.5s
+- Mean tokens in/out: 159723.85714285713/2351.0
+- Tokens/sec: 5.2
 
-## kaggle-qwen14b (rag=on)  (n=4)
+## kaggle-qwen14b (rag=on)  (n=7)
 
-- Raw accuracy: 2/4 (50%, Wilson 95% CI 15%-85%)
-- Coverage (confirmed): 50% (CI 15%-85%)
+- Raw accuracy: 2/7 (29%, Wilson 95% CI 8%-64%)
+- Coverage (confirmed): 29% (CI 8%-64%)
 - Selective accuracy (of confirmed, % actually right): 50%
-- **False-confidence rate: 1/4 (25%, CI 5%-70%)**
+- **False-confidence rate: 1/7 (14%, CI 3%-51%)**
 - Confirmed-recall (of correct answers, % flagged confident): 50%
-- Inconclusive (honest abstain) count: 0 (of which 0 were parse failures, not a real abstention decision)
-- Crashed runs (n=4 includes these; priced worse than inconclusive in the cost score below): 0
+- Inconclusive (honest abstain) count: 2 (of which 0 were parse failures, not a real abstention decision)
+- Crashed runs (n=7 includes these; priced worse than inconclusive in the cost score below): 0
 
 Reliability table:
   - confirmed: n=2, correct=1, accuracy=50%
-  - best_guess: n=2, correct=1, accuracy=50%
-  - inconclusive: n=0, correct=0, accuracy=n/a
-- Confidence-downgrade ablation: any gate fired on 0/4 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 25% vs WITH the gate(s) = 25%
+  - best_guess: n=3, correct=1, accuracy=33%
+  - inconclusive: n=2, correct=0, accuracy=0%
+- Confidence-downgrade ablation: any gate fired on 0/7 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 14% vs WITH the gate(s) = 14%
 
-- Contrast-pair accuracy (strict, both must be correct): 0/0 (n/a)
+- Contrast-pair accuracy (strict, both must be correct): 0/1 (0%)
+    - fault 13 vs 4: FAIL (scores -1.0/0.0)
 
 - Retrieval, by split (NOT pooled - each split has a different correct behavior):
-    - held_out_with_neighbor (n=2): hit@1=50%, MRR=0.50
-    - indexed (n=2): hit@1=100%, MRR=1.00 (expected ~100% - known-item search, this is leakage not generalization)
+    - held_out_no_neighbor (n=1): correct behavior is retrieving NOTHING relevant - false-positive hits: 0/1
+    - held_out_with_neighbor (n=3): hit@1=33%, MRR=0.50
+    - indexed (n=3): hit@1=100%, MRR=1.00 (expected ~100% - known-item search, this is leakage not generalization)
 
-- Cost-weighted skill score (confirmed-wrong=10x): -0.33
-  - Sensitivity sweep: 5x=0.08, 10x=-0.33, 20x=-1.17
-- Scripted-baseline-only accuracy (on baseline-sufficient faults): 33%
+- Cost-weighted skill score (confirmed-wrong=10x): -0.29
+  - Sensitivity sweep: 5x=-0.05, 10x=-0.29, 20x=-0.76
+- Scripted-baseline-only accuracy (on baseline-sufficient faults): 25%
 
 - Mean calls-to-resolution (correct answers only): 15.0
-- Mean fraction of cited evidence from the free baseline sweep: 52%
+- Mean fraction of cited evidence from the free baseline sweep: 45%
 - Mean evidence groundedness: 92%
-- Duplicate/tool-error/hallucination rate per run: 7.0/0.0/0.0
+- Duplicate/tool-error/hallucination rate per run: 5.428571428571429/0.0/0.0
 
-- Mean wall-clock per investigation: 439.9s
-- Mean tokens in/out: 160758.0/2853.25
-- Tokens/sec: 7.3
+- Mean wall-clock per investigation: 509.0s
+- Mean tokens in/out: 166793.42857142858/2632.5714285714284
+- Tokens/sec: 5.7
 
 ## kaggle-qwen32b (rag=off)  (n=3)
 

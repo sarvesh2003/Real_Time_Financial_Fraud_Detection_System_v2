@@ -1,2 +1,2 @@
-{"timestamp":"2026-09-11T00:08:03Z","family":"redis","fault":"04_slow_commands","action":"inject"}
-{"timestamp":"2026-09-11T00:12:09Z","family":"redis","fault":"04_slow_commands","action":"inject"}
+{"timestamp":"2026-09-11T03:50:50Z","family":"config","fault":"13_client_timeout_too_low","action":"inject"}
+{"timestamp":"2026-09-11T04:16:34Z","family":"config","fault":"13_client_timeout_too_low","action":"restore"}

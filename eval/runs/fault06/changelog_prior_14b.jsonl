@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-12T22:52:58Z","family":"config","fault":"13_client_timeout_too_low","action":"inject"}
+{"timestamp":"2026-09-12T23:14:07Z","family":"config","fault":"13_client_timeout_too_low","action":"restore"}

@@ -89,7 +89,7 @@ def build_result(
             "calls_used": None, "budget_exhausted": None,
             "llm_calls": 0, "llm_ms_total": 0.0, "tool_ms_total": 0.0,
             "input_tokens_total": 0, "output_tokens_total": 0,
-            "truncated_retries": 0, "baseline_evidence_count": 0,
+            "truncated_retries": 0, "empty_retries": 0, "baseline_evidence_count": 0,
             "baseline_config_diff_fired": False, "tool_call_sequence": [],
             "distinct_tools_used_total": [], "duplicate_calls": 0,
             "tool_errors": 0, "hallucinated_tool_calls": 0, "empty_result_calls": 0,
@@ -115,6 +115,9 @@ def build_result(
     hallucinated_tool_calls = sum(1 for e in evidence_log if "no such tool" in str(e.get("result", "")))
     empty_result_calls = sum(1 for e in evidence_log if str(e.get("result", "")).strip().startswith("(no") or "filter miss" in str(e.get("result", "")))
     truncated_retries = sum(1 for e in trace if e.get("event") == "action_selected" and e.get("truncated_retry"))
+    # Counted separately from truncated_retries: an empty-response retry is an
+    # infrastructure failure (server returned nothing), not output truncation.
+    empty_retries = sum(1 for e in trace if e.get("event") == "action_selected" and e.get("empty_retry"))
 
     valid_indices = conclusion.get("cited_evidence_indices", [])
     baseline_count = len(baseline_events)
@@ -144,6 +147,7 @@ def build_result(
         "input_tokens_total": sum(e.get("input_tokens") or 0 for e in llm_events),
         "output_tokens_total": sum(e.get("output_tokens") or 0 for e in llm_events),
         "truncated_retries": truncated_retries,
+        "empty_retries": empty_retries,
         "baseline_evidence_count": baseline_count,
         "baseline_config_diff_fired": any(e.get("tool_name") == "config_diff" for e in baseline_events),
         "tool_call_sequence": tool_call_sequence,

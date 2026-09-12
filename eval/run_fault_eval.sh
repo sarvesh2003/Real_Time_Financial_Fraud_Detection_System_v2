@@ -100,7 +100,10 @@ restore() {
 # had access to our Chroma corpus in the first place.
 RETRIEVAL_MODES=(on off)
 
-ENV_LABEL="kaggle-qwen32b"
+# Must track KAGGLE_MODEL. Hardcoding this meant overriding KAGGLE_MODEL alone
+# produced runs whose env_label said one model and whose model_id said another,
+# silently pooling two models under one label in results.csv.
+ENV_LABEL="${KAGGLE_ENV_LABEL:-kaggle-qwen32b}"
 
 run_leg() {
   local RAG_MODE="$1"

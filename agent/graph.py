@@ -291,9 +291,24 @@ def build_graph(llm, tools: list[BaseTool], collection):
         ])
         llm_meta = llm_call_meta(response, t0)
 
+        # A response with no tool calls is treated downstream as "the agent chose to
+        # conclude". Two cases are NOT that decision and must be retried instead:
+        #   - finish_reason == "length": the tool call was cut off mid-emission.
+        #   - empty content: the server returned nothing at all (observed on Ollama
+        #     over ngrok as a ~107s near-timeout with no content and no usage
+        #     metadata). Scoring that as an abstention attributes an infrastructure
+        #     failure to the model's judgment.
+        # Deliberately scoped to EMPTY content only: a response with prose and no
+        # tool call is still a real decision and keeps the original behaviour, so
+        # this is a no-op on every run recorded before this change.
         truncated_retry = False
-        if not response.tool_calls and response.response_metadata.get("finish_reason") == "length":
-            truncated_retry = True
+        empty_retry = False
+        if not response.tool_calls:
+            if response.response_metadata.get("finish_reason") == "length":
+                truncated_retry = True
+            elif not str(response.content or "").strip():
+                empty_retry = True
+        if truncated_retry or empty_retry:
             wasted_meta = llm_meta
             t0 = time.monotonic()
             response = await router_llm.ainvoke([
@@ -320,6 +335,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
         event = trace_event(
             "action_selected", node="investigate", action=action,
             calls_used=state["calls_used"], truncated_retry=truncated_retry,
+            empty_retry=empty_retry,
             retrieved=[{"fault_family": c["fault_family"], "fault_name": c["fault_name"], "distance": c["distance"]} for c in retrieved],
             **llm_meta,
         )
