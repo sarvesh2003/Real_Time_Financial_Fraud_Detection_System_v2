@@ -71,16 +71,33 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
         since: How far back to look, in Docker's own format — a duration like
             "10m" or "2h", or an RFC3339 timestamp.
         level: Optional substring filter, e.g. "ERROR" or "WARNING". Case-insensitive.
-            NOTE: services in this stack log unstructured, unleveled text (plain
-            Go log.Printf, no severity prefix) - a level filter will often match
-            zero lines even when the service is logging heavily. If you get an
-            empty result back, retry without the filter before concluding the
-            service is quiet.
+            NOTE: most lines in this stack are unstructured and unleveled (plain
+            Go log.Printf with no severity prefix), and some of the most
+            diagnostic lines carry no level at all - e.g. the Go Redis client
+            reports failures as "redis: ... i/o timeout" with no ERROR prefix.
+            A level="ERROR" filter therefore CANNOT match them, no matter how
+            broken things are. go-server does emit some "WARNING:" lines, so
+            that filter is not useless, but treat an empty level-filtered
+            result as "my filter missed", never as "this service is fine".
+            Prefer `grep` over `level` for this stack.
         grep: Optional regex filter applied to each log line. Case-insensitive.
+            Useful vocabulary actually present in this stack's logs:
+            "timeout", "i/o timeout", "deadline exceeded", "connection refused",
+            "refused", "no such host", "does not resolve", "rebalance",
+            "EOF", "retry", "WARNING", "panic".
 
     Returns:
-        Matching log lines, newest last, one per line. Capped at 500 lines —
-        narrow the time window or add a grep filter if you need more precision.
+        Matching log lines, newest last, one per line.
+
+        CAP: at most 500 lines are returned, and they are the NEWEST 500 -
+        everything older in your window is silently dropped. A busy service
+        here produces thousands of lines an hour, so a wide window can show
+        you only the last couple of minutes while looking like a full result.
+        This matters because a fault's first and most diagnostic lines usually
+        appear at the MOMENT it started, i.e. at the OLDEST end of your window
+        - exactly the part the cap discards. If you are looking for when
+        something began, narrow to a short window around that time or add a
+        grep filter, rather than widening the window.
     """
     result = run_compose("logs", "--no-color", f"--since={since}", "--", service)
 
@@ -109,12 +126,18 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
             )
         return f"(no log lines at all for '{service}' in the last {since})"
 
-    truncated = len(lines) > MAX_LOG_LINES
+    matched_count = len(lines)
+    truncated = matched_count > MAX_LOG_LINES
     lines = lines[-MAX_LOG_LINES:]
 
     output = "\n".join(lines)
     if truncated:
-        output = f"[showing last {MAX_LOG_LINES} matching lines — narrow the time window or filters for more precision]\n" + output
+        output = (
+            f"[TRUNCATED: {matched_count} of {len(raw_lines)} lines matched, showing only the "
+            f"NEWEST {MAX_LOG_LINES}. The older matches - including anything from when this "
+            f"condition first started - were dropped. Narrow to a short window around the "
+            f"time of interest, or add a grep filter, to see them.]\n"
+        ) + output
 
     return output
 
@@ -124,11 +147,31 @@ def get_metrics(promql: str, window: str) -> str:
     """Query Prometheus for a metric's trend over a recent time window.
 
     Args:
-        promql: A PromQL expression, e.g. "redis_evicted_keys_total",
-            "kafka_consumergroup_lag", or "rate(fraud_server_transactions_total[1m])".
-            Don't guess a metric name - a name that doesn't exist returns the
-            same empty result as a real metric with no data, so guessing can't
-            tell "not happening" apart from "not a real metric". Use
+        promql: A PromQL expression. This stack's own services export metrics
+            under the "fraud_" prefix (NOT "go_server_" or "go_enricher_" -
+            those are not real and will silently return nothing):
+
+              Latency (histograms - a fault can move these while every log
+              line stays clean, so check them before concluding "no errors,
+              nothing wrong"). Query with histogram_quantile, e.g.
+                histogram_quantile(0.99, sum(rate(
+                  fraud_server_transaction_duration_seconds_bucket[1m])) by (le))
+              - fraud_server_transaction_duration_seconds_bucket   (go-server)
+              - fraud_enricher_message_duration_seconds_bucket     (go-enricher)
+
+              Throughput / errors:
+              - fraud_server_transactions_total, fraud_server_transaction_errors_total
+              - fraud_enricher_messages_processed_total, fraud_enricher_errors_total
+              - fraud_enricher_duplicate_messages_total
+
+              Infrastructure (from exporters, not the apps):
+              - kafka_consumergroup_lag, kafka_consumergroup_members, kafka_brokers
+              - redis_evicted_keys_total, redis_memory_used_bytes, redis_up
+
+            This list is a starting point, not the full set. Don't guess a
+            name that isn't here - a name that doesn't exist returns the same
+            empty result as a real metric with no data, so guessing can't tell
+            "not happening" apart from "not a real metric". Use
             list_metric_names first if you're not certain a name exists.
             To check several related metrics in one call, use a regex label
             match like '{__name__=~"redis_(evicted_keys_total|memory_used_bytes)"}'
@@ -185,9 +228,15 @@ def get_metrics(promql: str, window: str) -> str:
 
         if not wide_results:
             return (
-                "(no time series matched this query even over a 6h+ window - this "
-                "metric/label combination has genuinely never been recorded, not just "
-                "quiet right now)"
+                "(no time series matched this query even over a 6h+ window. Two very "
+                "different things produce this identical result, and this tool cannot "
+                "tell them apart for you:\n"
+                "  1. the metric is real and genuinely has never been recorded, or\n"
+                "  2. the metric NAME is wrong, so nothing could ever match it.\n"
+                "Check 2 before believing 1. This stack's own services export under the "
+                "'fraud_' prefix - 'go_server_*' and 'go_enricher_*' are not real metric "
+                "names. Call list_metric_names(contains='...') to see what actually "
+                "exists before concluding this isn't happening.)"
             )
 
         last_ts = max(
@@ -379,6 +428,17 @@ def read_config(service: str) -> str:
         For app services: the actual resolved env vars on the running
         container (not the compose YAML text) for REDIS_/KAFKA_/GRPC_
         settings — anything that looks like a secret is always excluded.
+
+    HOW TO READ THE APP-SERVICE OUTPUT: most settings normally print as
+    "(unset, using library default)". A setting showing an explicit VALUE
+    while its siblings show "(unset, using library default)" was deliberately
+    overridden by someone - that asymmetry is the signal, and it is often the
+    entire root cause. Compare each line against the others in the SAME
+    service's output before moving on; a single conspicuous number sitting in
+    a column of defaults is a finding, not background. Note that a value which
+    looks harmlessly small can still be the fault: millisecond-scale timeouts
+    below a real network round trip make a perfectly healthy dependency look
+    like it is failing.
     """
     if service in _REDIS_SERVICES:
         return read_redis_config(service)
