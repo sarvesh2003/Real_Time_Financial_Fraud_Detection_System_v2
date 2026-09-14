@@ -1,3 +1,20 @@
+> **WITHDRAWN. Do not cite any number in this file.**
+>
+> This is the raw output of `eval/aggregate.py` over all 38 graded rows. It pools rows
+> that are not comparable and rows whose answers were reachable without investigating, so
+> every accuracy, coverage, false-confidence, retrieval and cost figure below is
+> unattributable. `python eval/validity/run.py` exits non-zero on this dataset and lists
+> the nine reasons.
+>
+> Specifically: six rows never received their prompt, twelve had the full answer in the
+> free baseline sweep, twelve were hand-transcribed under a different scaffold with no
+> budget, five are unresolved review rows, three predate a confidence rule applied to the
+> others, and the retrieval corpus states the answers verbatim so every Hit@1 and MRR
+> figure here is meaningless.
+>
+> The numbers that survive are in `MASTER.md` section 10a. This file is kept only so the
+> pre-gate output remains inspectable.
+
 # Eval summary
 
 Total graded runs: 38
@@ -250,19 +267,19 @@ Reliability table:
 
 ## local-qwen9b (rag=off)  (n=3)
 
-- Raw accuracy: 1/3 (33%, Wilson 95% CI 6%-79%)
+- Raw accuracy: 0/3 (0%, Wilson 95% CI 0%-56%)
 - Coverage (confirmed): 67% (CI 21%-94%)
-- Selective accuracy (of confirmed, % actually right): 50%
-- **False-confidence rate: 1/3 (33%, CI 6%-79%)**
-- Confirmed-recall (of correct answers, % flagged confident): 100%
+- Selective accuracy (of confirmed, % actually right): 0%
+- **False-confidence rate: 2/3 (67%, CI 21%-94%)**
+- Confirmed-recall (of correct answers, % flagged confident): n/a
 - Inconclusive (honest abstain) count: 0 (of which 0 were parse failures, not a real abstention decision)
 - Crashed runs (n=3 includes these; priced worse than inconclusive in the cost score below): 0
 
 Reliability table:
-  - confirmed: n=2, correct=1, accuracy=50%
+  - confirmed: n=2, correct=0, accuracy=0%
   - best_guess: n=1, correct=0, accuracy=0%
   - inconclusive: n=0, correct=0, accuracy=n/a
-- Confidence-downgrade ablation: any gate fired on 1/3 runs (0 corroboration, 0 budget-exhaustion, 1 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 67% vs WITH the gate(s) = 33%
+- Confidence-downgrade ablation: any gate fired on 1/3 runs (0 corroboration, 0 budget-exhaustion, 1 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 100% vs WITH the gate(s) = 67%
 
 - Contrast-pair accuracy (strict, both must be correct): 0/0 (n/a)
 
@@ -270,11 +287,11 @@ Reliability table:
     - held_out_with_neighbor: n/a
     - indexed: n/a
 
-- Cost-weighted skill score (confirmed-wrong=10x): -0.67
-  - Sensitivity sweep: 5x=-0.11, 10x=-0.67, 20x=-1.78
-- Scripted-baseline-only accuracy (on baseline-sufficient faults): 33%
+- Cost-weighted skill score (confirmed-wrong=10x): -1.78
+  - Sensitivity sweep: 5x=-0.67, 10x=-1.78, 20x=-4.00
+- Scripted-baseline-only accuracy (on baseline-sufficient faults): 0%
 
-- Mean calls-to-resolution (correct answers only): 0.0
+- Mean calls-to-resolution: n/a
 - Mean fraction of cited evidence from the free baseline sweep: 100%
 - Mean evidence groundedness: 100%
 - Duplicate/tool-error/hallucination rate per run: 0.0/0.0/0.0
@@ -285,19 +302,19 @@ Reliability table:
 
 ## local-qwen9b (rag=on)  (n=3)
 
-- Raw accuracy: 1/3 (33%, Wilson 95% CI 6%-79%)
+- Raw accuracy: 0/3 (0%, Wilson 95% CI 0%-56%)
 - Coverage (confirmed): 100% (CI 44%-100%)
-- Selective accuracy (of confirmed, % actually right): 33%
-- **False-confidence rate: 2/3 (67%, CI 21%-94%)**
-- Confirmed-recall (of correct answers, % flagged confident): 100%
+- Selective accuracy (of confirmed, % actually right): 0%
+- **False-confidence rate: 3/3 (100%, CI 44%-100%)**
+- Confirmed-recall (of correct answers, % flagged confident): n/a
 - Inconclusive (honest abstain) count: 0 (of which 0 were parse failures, not a real abstention decision)
 - Crashed runs (n=3 includes these; priced worse than inconclusive in the cost score below): 0
 
 Reliability table:
-  - confirmed: n=3, correct=1, accuracy=33%
+  - confirmed: n=3, correct=0, accuracy=0%
   - best_guess: n=0, correct=0, accuracy=n/a
   - inconclusive: n=0, correct=0, accuracy=n/a
-- Confidence-downgrade ablation: any gate fired on 0/3 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 67% vs WITH the gate(s) = 67%
+- Confidence-downgrade ablation: any gate fired on 0/3 runs (0 corroboration, 0 budget-exhaustion, 0 from before downgrade_reason was tracked); false-confidence rate WITHOUT any gate (raw self-reported) = 100% vs WITH the gate(s) = 100%
 
 - Contrast-pair accuracy (strict, both must be correct): 0/0 (n/a)
 
@@ -305,11 +322,11 @@ Reliability table:
     - held_out_with_neighbor (n=1): hit@1=100%, MRR=1.00
     - indexed (n=2): hit@1=100%, MRR=1.00 (expected ~100% - known-item search, this is leakage not generalization)
 
-- Cost-weighted skill score (confirmed-wrong=10x): -1.22
-  - Sensitivity sweep: 5x=-0.11, 10x=-1.22, 20x=-3.44
-- Scripted-baseline-only accuracy (on baseline-sufficient faults): 33%
+- Cost-weighted skill score (confirmed-wrong=10x): -2.33
+  - Sensitivity sweep: 5x=-0.67, 10x=-2.33, 20x=-5.67
+- Scripted-baseline-only accuracy (on baseline-sufficient faults): 0%
 
-- Mean calls-to-resolution (correct answers only): 0.0
+- Mean calls-to-resolution: n/a
 - Mean fraction of cited evidence from the free baseline sweep: 100%
 - Mean evidence groundedness: n/a
 - Duplicate/tool-error/hallucination rate per run: 0.0/0.0/0.0
