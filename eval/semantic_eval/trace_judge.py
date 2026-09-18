@@ -74,12 +74,12 @@ from pathlib import Path
 from typing import Sequence
 
 from .artifacts import RUNS_DIR, LoadedRun, is_recorded, load_runs
-from .gate import GateReport, run_gate
+from .eligibility_policy import EligibilityReport, run_policy
 from .judge_client import (
     DEFAULT_JUDGE_MODEL,
-    AnthropicJudge,
     JudgeClient,
     JudgeOutputError,
+    create_judge,
     strip_fence,
 )
 
@@ -489,7 +489,7 @@ def judge_trace(
 
 def judge_traces(
     runs: Sequence[LoadedRun],
-    gate: GateReport,
+    gate: EligibilityReport,
     client: JudgeClient,
     max_retries: int = MAX_RETRIES,
 ) -> tuple[TraceResult, ...]:
@@ -668,7 +668,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.self_check:
-        client = AnthropicJudge(model=args.model)
+        client = create_judge(model=args.model)
         failures = 0
         for case in TRACE_SELF_CHECK_CASES:
             try:
@@ -689,7 +689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"\n{len(TRACE_SELF_CHECK_CASES) - failures}/{len(TRACE_SELF_CHECK_CASES)} matched")
         return 1 if failures else 0
 
-    gate = run_gate(args.runs_dir)
+    gate = run_policy(args.runs_dir)
     runs = load_runs(args.runs_dir)
     allowed = set(gate.eligible_run_ids)
     population = [r for r in runs if r.run_id in allowed]
@@ -715,7 +715,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(prompt)
         return 0
 
-    results = judge_traces(runs, gate, AnthropicJudge(model=args.model))
+    results = judge_traces(runs, gate, create_judge(model=args.model))
     _summarize(results)
     for res in results:
         if res.judged:

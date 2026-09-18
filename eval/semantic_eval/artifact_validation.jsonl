@@ -1,0 +1,38 @@
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault1_claude-desktop-haiku4.5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault1_claude-desktop-haiku4.5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault1_claude-desktop-opus5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault1_claude-desktop-opus5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault1_claude-desktop-sonnet5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault1_claude-desktop-sonnet5", "valid": true}
+{"issues": [], "run_id": "fault1_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault1_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault1_local-qwen9b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault1_local-qwen9b_ragon", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault2_claude-desktop-haiku4.5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault2_claude-desktop-haiku4.5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault2_claude-desktop-opus5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault2_claude-desktop-opus5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault2_claude-desktop-sonnet5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault2_claude-desktop-sonnet5", "valid": true}
+{"issues": [], "run_id": "fault2_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault2_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault2_local-qwen9b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault2_local-qwen9b_ragon", "valid": true}
+{"issues": [], "run_id": "fault3_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault3_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault3_local-qwen9b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault3_local-qwen9b_ragon", "valid": true}
+{"issues": [], "run_id": "fault4_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault4_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault6_claude-desktop-haiku4.5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault6_claude-desktop-haiku4.5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault6_claude-desktop-sonnet5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault6_claude-desktop-sonnet5", "valid": true}
+{"issues": [], "run_id": "fault6_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault6_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault6_kaggle-qwen32b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault6_kaggle-qwen32b_ragon", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault9_claude-desktop-haiku4.5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault9_claude-desktop-haiku4.5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault9_claude-desktop-sonnet5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault9_claude-desktop-sonnet5", "valid": true}
+{"issues": [], "run_id": "fault9_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault9_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault9_kaggle-qwen32b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault9_kaggle-qwen32b_ragon", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault13_claude-desktop-haiku4.5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault13_claude-desktop-haiku4.5", "valid": true}
+{"issues": [{"blocking": false, "code": "trace_missing", "message": "no fault13_claude-desktop-sonnet5.trace.jsonl beside the result record; nothing the agent observed can be inspected for this run"}], "run_id": "fault13_claude-desktop-sonnet5", "valid": true}
+{"issues": [], "run_id": "fault13_kaggle-qwen14b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault13_kaggle-qwen14b_ragon", "valid": true}
+{"issues": [], "run_id": "fault13_kaggle-qwen32b_ragoff", "valid": true}
+{"issues": [], "run_id": "fault13_kaggle-qwen32b_ragon", "valid": true}

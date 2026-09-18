@@ -14,9 +14,12 @@ a key.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -110,3 +113,79 @@ class AnthropicJudge:
         return "".join(
             block.text for block in response.content if getattr(block, "type", "") == "text"
         )
+
+class OllamaJudge:
+    """Judge adapter for an Ollama server exposed through the Kaggle tunnel."""
+
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int = 512,
+        temperature: float = JUDGE_TEMPERATURE,
+        base_url: str | None = None,
+    ):
+        try:
+            from dotenv import load_dotenv
+        except ImportError as exc:  # pragma: no cover - environment dependent
+            raise RuntimeError("python-dotenv is required to load the judge endpoint") from exc
+
+        load_dotenv(REPO_ROOT / ".env")
+        endpoint = base_url or os.environ.get("KAGGLE_LLM_BASE_URL")
+        if not endpoint:
+            raise RuntimeError("KAGGLE_LLM_BASE_URL is not set in the environment or .env")
+
+        self.model = model
+        self.temperature = temperature
+        self._max_tokens = max_tokens
+        self._base_url = endpoint.rstrip("/")
+        self._context_window = int(os.environ.get("LLM_JUDGE_CONTEXT_WINDOW", "32768"))
+        self._timeout = int(os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS", "300"))
+
+    def complete(self, prompt: str) -> str:  # pragma: no cover - needs live endpoint
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "format": "json",
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self._max_tokens,
+                "num_ctx": self._context_window,
+            },
+        }
+        request = Request(
+            f"{self._base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "ngrok-skip-browser-warning": "true",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self._timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Ollama judge request failed: {exc}") from exc
+
+        content = result.get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise JudgeOutputError("Ollama returned no message content")
+        return content
+
+
+def create_judge(
+    model: str = DEFAULT_JUDGE_MODEL,
+    max_tokens: int = 512,
+    temperature: float = JUDGE_TEMPERATURE,
+) -> JudgeClient:
+    try:
+        from dotenv import load_dotenv
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError("python-dotenv is required to load judge configuration") from exc
+
+    load_dotenv(REPO_ROOT / ".env")
+    if os.environ.get("KAGGLE_LLM_BASE_URL"):
+        return OllamaJudge(model, max_tokens, temperature)
+    return AnthropicJudge(model, max_tokens, temperature)

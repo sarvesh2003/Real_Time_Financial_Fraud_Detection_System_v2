@@ -1,0 +1,571 @@
+{
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-09-18T03:29:05.000872+00:00",
+  "status": "provisional_awaiting_human_calibration",
+  "evaluation": {
+    "pipeline": "semantic_eval",
+    "judge_models": {
+      "leakage_review": [
+        "gemma4:12b-it-qat"
+      ],
+      "diagnosis": [
+        "gemma4:12b-it-qat"
+      ],
+      "trace": [
+        "gemma4:12b-it-qat"
+      ]
+    },
+    "judge_temperature": 0.0,
+    "structured_output": "json",
+    "exposed_thinking": false,
+    "statistical_interval": "two-sided Wilson score interval",
+    "confidence_level": 0.95
+  },
+  "validation": {
+    "artifacts": {
+      "total": 38,
+      "valid": 38,
+      "invalid": 0,
+      "invalid_run_ids": [],
+      "issue_counts": {
+        "trace_missing": 12
+      }
+    },
+    "leakage_review": {
+      "reviewed": 38,
+      "counts": {
+        "CONFIRMED_LEAK": 8,
+        "PARTIAL_HINT": 0,
+        "GENERIC_OVERLAP": 0,
+        "NO_LEAK": 30,
+        "UNJUDGEABLE": 0
+      },
+      "blocking_label": "CONFIRMED_LEAK",
+      "excluded_run_ids": [
+        "fault13_kaggle-qwen14b_ragoff",
+        "fault13_kaggle-qwen14b_ragon",
+        "fault13_kaggle-qwen32b_ragoff",
+        "fault13_kaggle-qwen32b_ragon",
+        "fault3_kaggle-qwen14b_ragoff",
+        "fault3_kaggle-qwen14b_ragon",
+        "fault3_local-qwen9b_ragoff",
+        "fault3_local-qwen9b_ragon"
+      ],
+      "error_run_ids": []
+    },
+    "eligibility": {
+      "total_runs": 38,
+      "eligible": 30,
+      "excluded": 8,
+      "needs_review": 0,
+      "trace_judgeable": 18,
+      "all_invariants_verified": true,
+      "unverified_invariants": [],
+      "exclusion_counts": {
+        "confirmed_semantic_leakage": 8
+      },
+      "caveats": [],
+      "eligible_run_ids": [
+        "fault1_claude-desktop-haiku4.5",
+        "fault1_claude-desktop-opus5",
+        "fault1_claude-desktop-sonnet5",
+        "fault1_kaggle-qwen14b_ragoff",
+        "fault1_kaggle-qwen14b_ragon",
+        "fault1_local-qwen9b_ragoff",
+        "fault1_local-qwen9b_ragon",
+        "fault2_claude-desktop-haiku4.5",
+        "fault2_claude-desktop-opus5",
+        "fault2_claude-desktop-sonnet5",
+        "fault2_kaggle-qwen14b_ragoff",
+        "fault2_kaggle-qwen14b_ragon",
+        "fault2_local-qwen9b_ragoff",
+        "fault2_local-qwen9b_ragon",
+        "fault4_kaggle-qwen14b_ragoff",
+        "fault4_kaggle-qwen14b_ragon",
+        "fault6_claude-desktop-haiku4.5",
+        "fault6_claude-desktop-sonnet5",
+        "fault6_kaggle-qwen14b_ragoff",
+        "fault6_kaggle-qwen14b_ragon",
+        "fault6_kaggle-qwen32b_ragoff",
+        "fault6_kaggle-qwen32b_ragon",
+        "fault9_claude-desktop-haiku4.5",
+        "fault9_claude-desktop-sonnet5",
+        "fault9_kaggle-qwen14b_ragoff",
+        "fault9_kaggle-qwen14b_ragon",
+        "fault9_kaggle-qwen32b_ragoff",
+        "fault9_kaggle-qwen32b_ragon",
+        "fault13_claude-desktop-haiku4.5",
+        "fault13_claude-desktop-sonnet5"
+      ],
+      "excluded_run_ids": [
+        "fault3_kaggle-qwen14b_ragoff",
+        "fault3_kaggle-qwen14b_ragon",
+        "fault3_local-qwen9b_ragoff",
+        "fault3_local-qwen9b_ragon",
+        "fault13_kaggle-qwen14b_ragoff",
+        "fault13_kaggle-qwen14b_ragon",
+        "fault13_kaggle-qwen32b_ragoff",
+        "fault13_kaggle-qwen32b_ragon"
+      ]
+    }
+  },
+  "population": {
+    "runs_discovered": 38,
+    "excluded_by_validity_gate": 8,
+    "eligible_for_judging": 30,
+    "of_those_trace_gradable": 18,
+    "diagnosis_judged": 30,
+    "trace_judged": 18,
+    "exclusions_by_reason": {
+      "confirmed_semantic_leakage": 8
+    },
+    "invariants_left_untested": []
+  },
+  "diagnosis_quality": {
+    "counts": {
+      "CORRECT": 12,
+      "PARTIAL": 1,
+      "INCORRECT": 10,
+      "ABSTAIN": 7
+    },
+    "n_judged": 30,
+    "n_unjudged": 0,
+    "unjudged_run_ids": [],
+    "strict_diagnosis_accuracy": {
+      "name": "strict diagnosis accuracy",
+      "numerator": 12,
+      "denominator": 30,
+      "point": 0.4,
+      "wilson_95_ci": [
+        0.24590394326083398,
+        0.5767994750172617
+      ]
+    },
+    "partial_rate": {
+      "name": "partial rate",
+      "numerator": 1,
+      "denominator": 30,
+      "point": 0.03333333333333333,
+      "wilson_95_ci": [
+        0.005908437994857381,
+        0.16670751396958874
+      ]
+    },
+    "incorrect_rate": {
+      "name": "incorrect rate",
+      "numerator": 10,
+      "denominator": 30,
+      "point": 0.3333333333333333,
+      "wilson_95_ci": [
+        0.19230295526846194,
+        0.5122027418616973
+      ]
+    },
+    "abstention_rate": {
+      "name": "abstention rate",
+      "numerator": 7,
+      "denominator": 30,
+      "point": 0.23333333333333334,
+      "wilson_95_ci": [
+        0.11792239210501229,
+        0.40928672330324267
+      ]
+    }
+  },
+  "investigation_quality": [
+    {
+      "dimension": "evidence_support",
+      "counts": {
+        "PASS": 13,
+        "PARTIAL": 0,
+        "FAIL": 5
+      },
+      "pass_rate": {
+        "name": "evidence_support PASS rate",
+        "numerator": 13,
+        "denominator": 18,
+        "point": 0.7222222222222222,
+        "wilson_95_ci": [
+          0.49126922453805477,
+          0.8750043085364453
+        ]
+      },
+      "n_unjudgeable": 12,
+      "unjudgeable_run_ids": [
+        "fault1_claude-desktop-haiku4.5",
+        "fault1_claude-desktop-opus5",
+        "fault1_claude-desktop-sonnet5",
+        "fault2_claude-desktop-haiku4.5",
+        "fault2_claude-desktop-opus5",
+        "fault2_claude-desktop-sonnet5",
+        "fault6_claude-desktop-haiku4.5",
+        "fault6_claude-desktop-sonnet5",
+        "fault9_claude-desktop-haiku4.5",
+        "fault9_claude-desktop-sonnet5",
+        "fault13_claude-desktop-haiku4.5",
+        "fault13_claude-desktop-sonnet5"
+      ]
+    },
+    {
+      "dimension": "causal_reasoning",
+      "counts": {
+        "PASS": 13,
+        "PARTIAL": 1,
+        "FAIL": 4
+      },
+      "pass_rate": {
+        "name": "causal_reasoning PASS rate",
+        "numerator": 13,
+        "denominator": 18,
+        "point": 0.7222222222222222,
+        "wilson_95_ci": [
+          0.49126922453805477,
+          0.8750043085364453
+        ]
+      },
+      "n_unjudgeable": 12,
+      "unjudgeable_run_ids": [
+        "fault1_claude-desktop-haiku4.5",
+        "fault1_claude-desktop-opus5",
+        "fault1_claude-desktop-sonnet5",
+        "fault2_claude-desktop-haiku4.5",
+        "fault2_claude-desktop-opus5",
+        "fault2_claude-desktop-sonnet5",
+        "fault6_claude-desktop-haiku4.5",
+        "fault6_claude-desktop-sonnet5",
+        "fault9_claude-desktop-haiku4.5",
+        "fault9_claude-desktop-sonnet5",
+        "fault13_claude-desktop-haiku4.5",
+        "fault13_claude-desktop-sonnet5"
+      ]
+    },
+    {
+      "dimension": "investigation_quality",
+      "counts": {
+        "PASS": 13,
+        "PARTIAL": 0,
+        "FAIL": 5
+      },
+      "pass_rate": {
+        "name": "investigation_quality PASS rate",
+        "numerator": 13,
+        "denominator": 18,
+        "point": 0.7222222222222222,
+        "wilson_95_ci": [
+          0.49126922453805477,
+          0.8750043085364453
+        ]
+      },
+      "n_unjudgeable": 12,
+      "unjudgeable_run_ids": [
+        "fault1_claude-desktop-haiku4.5",
+        "fault1_claude-desktop-opus5",
+        "fault1_claude-desktop-sonnet5",
+        "fault2_claude-desktop-haiku4.5",
+        "fault2_claude-desktop-opus5",
+        "fault2_claude-desktop-sonnet5",
+        "fault6_claude-desktop-haiku4.5",
+        "fault6_claude-desktop-sonnet5",
+        "fault9_claude-desktop-haiku4.5",
+        "fault9_claude-desktop-sonnet5",
+        "fault13_claude-desktop-haiku4.5",
+        "fault13_claude-desktop-sonnet5"
+      ]
+    }
+  ],
+  "confidence_reliability": {
+    "reliability_table": [
+      {
+        "confidence": "confirmed",
+        "n": 15,
+        "counts": {
+          "CORRECT": 10,
+          "PARTIAL": 0,
+          "INCORRECT": 5,
+          "ABSTAIN": 0
+        }
+      },
+      {
+        "confidence": "best_guess",
+        "n": 8,
+        "counts": {
+          "CORRECT": 2,
+          "PARTIAL": 1,
+          "INCORRECT": 5,
+          "ABSTAIN": 0
+        }
+      },
+      {
+        "confidence": "inconclusive",
+        "n": 7,
+        "counts": {
+          "CORRECT": 0,
+          "PARTIAL": 0,
+          "INCORRECT": 0,
+          "ABSTAIN": 7
+        }
+      }
+    ],
+    "coverage": {
+      "name": "coverage (confirmed / judged)",
+      "numerator": 15,
+      "denominator": 30,
+      "point": 0.5,
+      "wilson_95_ci": [
+        0.3315385122717376,
+        0.6684614877282624
+      ]
+    },
+    "selective_accuracy": {
+      "name": "selective accuracy (CORRECT & confirmed / confirmed)",
+      "numerator": 10,
+      "denominator": 15,
+      "point": 0.6666666666666666,
+      "wilson_95_ci": [
+        0.4171312515121298,
+        0.8482389930530875
+      ]
+    },
+    "false_confidence_exposure": {
+      "name": "false-confidence exposure (confirmed & INCORRECT / judged)",
+      "numerator": 5,
+      "denominator": 30,
+      "point": 0.16666666666666666,
+      "wilson_95_ci": [
+        0.07336434240351682,
+        0.3356470518568018
+      ]
+    },
+    "error_among_confirmed": {
+      "name": "error among confirmed (confirmed & INCORRECT / confirmed)",
+      "numerator": 5,
+      "denominator": 15,
+      "point": 0.3333333333333333,
+      "wilson_95_ci": [
+        0.15176100694691236,
+        0.5828687484878702
+      ]
+    },
+    "partial_among_confirmed": {
+      "name": "PARTIAL among confirmed (confirmed & PARTIAL / confirmed)",
+      "numerator": 0,
+      "denominator": 15,
+      "point": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.20388926630434784
+      ]
+    }
+  },
+  "supporting_operational_metrics": {
+    "note": "Cost and behaviour diagnostics. These are deterministic counters, not quality measures: a low tool-error count does not mean the diagnosis was good, and evidence_groundedness is a narrow numeric-token check rather than evidence of reasoning quality.",
+    "fields": {
+      "calls_used": {
+        "field": "calls_used",
+        "n_recorded": 25,
+        "n_missing": 5,
+        "mean": 10.4,
+        "median": 15,
+        "min": 0,
+        "max": 23
+      },
+      "duplicate_calls": {
+        "field": "duplicate_calls",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 4.277777777777778,
+        "median": 5.0,
+        "min": 0,
+        "max": 11
+      },
+      "tool_errors": {
+        "field": "tool_errors",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 0.0,
+        "median": 0.0,
+        "min": 0,
+        "max": 0
+      },
+      "hallucinated_tool_calls": {
+        "field": "hallucinated_tool_calls",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 0.0,
+        "median": 0.0,
+        "min": 0,
+        "max": 0
+      },
+      "empty_result_calls": {
+        "field": "empty_result_calls",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 6.277777777777778,
+        "median": 5.5,
+        "min": 5,
+        "max": 9
+      },
+      "llm_calls": {
+        "field": "llm_calls",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 11.833333333333334,
+        "median": 17.0,
+        "min": 2,
+        "max": 17
+      },
+      "wall_clock_s": {
+        "field": "wall_clock_s",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 354.6734047611074,
+        "median": 382.356736450005,
+        "min": 79.57878090000304,
+        "max": 672.5826199000003
+      },
+      "input_tokens_total": {
+        "field": "input_tokens_total",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 111556.94444444444,
+        "median": 147397.0,
+        "min": 3725,
+        "max": 193864
+      },
+      "output_tokens_total": {
+        "field": "output_tokens_total",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 1879.4444444444443,
+        "median": 2105.5,
+        "min": 201,
+        "max": 3364
+      },
+      "n_cited": {
+        "field": "n_cited",
+        "n_recorded": 30,
+        "n_missing": 0,
+        "mean": 4.533333333333333,
+        "median": 3.0,
+        "min": 0,
+        "max": 30
+      },
+      "cited_baseline_fraction": {
+        "field": "cited_baseline_fraction",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 0.5515873015873016,
+        "median": 0.4642857142857143,
+        "min": 0.16666666666666666,
+        "max": 1.0
+      },
+      "baseline_evidence_count": {
+        "field": "baseline_evidence_count",
+        "n_recorded": 18,
+        "n_missing": 12,
+        "mean": 15.222222222222221,
+        "median": 15.0,
+        "min": 15,
+        "max": 16
+      },
+      "evidence_groundedness": {
+        "field": "evidence_groundedness",
+        "n_recorded": 8,
+        "n_missing": 22,
+        "mean": 0.9270833333333334,
+        "median": 1.0,
+        "min": 0.6666666666666666,
+        "max": 1.0
+      }
+    }
+  },
+  "fault_family_slices": [
+    {
+      "family": "config",
+      "n_eligible": 2,
+      "n_judged": 2,
+      "counts": {
+        "CORRECT": 1,
+        "PARTIAL": 0,
+        "INCORRECT": 0,
+        "ABSTAIN": 1
+      },
+      "run_ids": [
+        "fault13_claude-desktop-haiku4.5",
+        "fault13_claude-desktop-sonnet5"
+      ]
+    },
+    {
+      "family": "kafka",
+      "n_eligible": 6,
+      "n_judged": 6,
+      "counts": {
+        "CORRECT": 0,
+        "PARTIAL": 1,
+        "INCORRECT": 3,
+        "ABSTAIN": 2
+      },
+      "run_ids": [
+        "fault6_claude-desktop-haiku4.5",
+        "fault6_claude-desktop-sonnet5",
+        "fault6_kaggle-qwen14b_ragoff",
+        "fault6_kaggle-qwen14b_ragon",
+        "fault6_kaggle-qwen32b_ragoff",
+        "fault6_kaggle-qwen32b_ragon"
+      ]
+    },
+    {
+      "family": "network",
+      "n_eligible": 6,
+      "n_judged": 6,
+      "counts": {
+        "CORRECT": 2,
+        "PARTIAL": 0,
+        "INCORRECT": 1,
+        "ABSTAIN": 3
+      },
+      "run_ids": [
+        "fault9_claude-desktop-haiku4.5",
+        "fault9_claude-desktop-sonnet5",
+        "fault9_kaggle-qwen14b_ragoff",
+        "fault9_kaggle-qwen14b_ragon",
+        "fault9_kaggle-qwen32b_ragoff",
+        "fault9_kaggle-qwen32b_ragon"
+      ]
+    },
+    {
+      "family": "redis",
+      "n_eligible": 16,
+      "n_judged": 16,
+      "counts": {
+        "CORRECT": 9,
+        "PARTIAL": 0,
+        "INCORRECT": 6,
+        "ABSTAIN": 1
+      },
+      "run_ids": [
+        "fault1_claude-desktop-haiku4.5",
+        "fault1_claude-desktop-opus5",
+        "fault1_claude-desktop-sonnet5",
+        "fault1_kaggle-qwen14b_ragoff",
+        "fault1_kaggle-qwen14b_ragon",
+        "fault1_local-qwen9b_ragoff",
+        "fault1_local-qwen9b_ragon",
+        "fault2_claude-desktop-haiku4.5",
+        "fault2_claude-desktop-opus5",
+        "fault2_claude-desktop-sonnet5",
+        "fault2_kaggle-qwen14b_ragoff",
+        "fault2_kaggle-qwen14b_ragon",
+        "fault2_local-qwen9b_ragoff",
+        "fault2_local-qwen9b_ragon",
+        "fault4_kaggle-qwen14b_ragoff",
+        "fault4_kaggle-qwen14b_ragon"
+      ]
+    }
+  ],
+  "judge_calibration_status": "awaiting_human_labels",
+  "known_limitations": [
+    "8 of 30 eligible run(s) target a transient fault that self-resolves within seconds, while the runs lasted minutes. For those, 'nothing is wrong' may be an accurate observation of the system at the time the agent looked. Affected: fault4_kaggle-qwen14b_ragoff, fault4_kaggle-qwen14b_ragon, fault6_claude-desktop-haiku4.5, fault6_claude-desktop-sonnet5, fault6_kaggle-qwen14b_ragoff, fault6_kaggle-qwen14b_ragon, fault6_kaggle-qwen32b_ragoff, fault6_kaggle-qwen32b_ragon.",
+    "Diagnosis correctness and investigation quality come from an LLM judge whose agreement with a human has not yet been measured; see the judge-calibration section for its status."
+  ]
+}

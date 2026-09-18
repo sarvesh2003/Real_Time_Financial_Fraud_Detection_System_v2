@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .artifacts import RUNS_DIR, LoadedRun, is_recorded, load_runs
-from .gate import GateReport, eligible_runs, run_gate
+from .eligibility_policy import EligibilityReport, eligible_runs, run_policy
 from .ground_truth import GroundTruthError, load_ground_truth
 from .trace_judge import DIMENSIONS as TRACE_DIMENSIONS
 from .trace_judge import build_trace_prompt
@@ -444,7 +444,7 @@ class QueueItem:
 
 
 def build_calibration_queue(
-    runs: Sequence[LoadedRun], gate: GateReport
+    runs: Sequence[LoadedRun], gate: EligibilityReport
 ) -> tuple[QueueItem, ...]:
     """
     The runs a human should label: the validity-eligible ones, and only those.
@@ -838,7 +838,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true", help="write judge_calibration.json")
     args = parser.parse_args(argv)
 
-    gate = run_gate(args.runs_dir)
+    gate = run_policy(args.runs_dir)
     queue = build_calibration_queue(load_runs(args.runs_dir), gate)
 
     print(f"calibration queue: {len(queue)} validity-eligible run(s) of {gate.total_runs}")

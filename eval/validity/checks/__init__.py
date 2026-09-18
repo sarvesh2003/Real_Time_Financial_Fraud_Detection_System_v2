@@ -13,7 +13,6 @@ import importlib
 _MODULES = (
     "stimulus_validity",
     "context_integrity",
-    "leakage",
     "behavioral_evidence",
     "scoring_integrity",
     "comparability",

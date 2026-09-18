@@ -64,13 +64,13 @@ from pathlib import Path
 from typing import Sequence
 
 from .artifacts import RUNS_DIR, LoadedRun, is_recorded, load_runs
-from .gate import GateReport, eligible_runs, run_gate
+from .eligibility_policy import EligibilityReport, eligible_runs, run_policy
 from .ground_truth import FaultGroundTruth, GroundTruthError, load_ground_truth
-from .judge_client import (  # noqa: F401 - AnthropicJudge/JudgeClient re-exported
+from .judge_client import (
     DEFAULT_JUDGE_MODEL,
-    AnthropicJudge,
     JudgeClient,
     JudgeOutputError,
+    create_judge,
     strip_fence,
 )
 
@@ -301,7 +301,7 @@ def judge_run(
 
 def judge_runs(
     runs: Sequence[LoadedRun],
-    gate: GateReport,
+    gate: EligibilityReport,
     client: JudgeClient,
     max_retries: int = MAX_RETRIES,
 ) -> tuple[DiagnosisResult, ...]:
@@ -474,7 +474,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.self_check:
-        client = AnthropicJudge(model=args.model)
+        client = create_judge(model=args.model)
         failures = 0
         for case in SELF_CHECK_CASES:
             try:
@@ -492,7 +492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"\n{len(SELF_CHECK_CASES) - failures}/{len(SELF_CHECK_CASES)} cases matched")
         return 1 if failures else 0
 
-    gate = run_gate(args.runs_dir)
+    gate = run_policy(args.runs_dir)
     runs = load_runs(args.runs_dir)
     population = eligible_runs(runs, gate)
 
@@ -512,7 +512,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(prompt)
         return 0
 
-    results = judge_runs(runs, gate, AnthropicJudge(model=args.model))
+    results = judge_runs(runs, gate, create_judge(model=args.model))
     _summarize(results)
     for res in results:
         if res.judged:

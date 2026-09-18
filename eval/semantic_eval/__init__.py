@@ -8,12 +8,16 @@ compared instead of one silently overwriting the other.
 
 Layout, in the order the pipeline runs:
 
-    artifacts.py   load a historical run into memory and check, with code only,
-                   that everything it cites actually exists. No model is called
-                   here and no quality judgement is made.
-    gate.py        translate `eval/validity/`'s findings into a per-run
-                   eligibility decision. Adds no invariant of its own. Nothing
-                   downstream may aggregate a run this refuses.
+    artifacts.py   load historical results and traces without inventing values.
+    artifact_validator.py
+                   block only objectively broken artifacts.
+    leakage_reviewer.py
+                   inspect exact pre-action context in two model passes:
+                   evidence extraction, then a categorical decision.
+    eligibility_policy.py
+                   exclude confirmed leakage and broken artifacts. Uncertain or
+                   missing leakage reviews remain visible as needs-review.
+    gate.py        compatibility imports for older callers.
     ground_truth.py
                    the answer key, read verbatim off the injection script that
                    was executed. Never the rubric's phrase lists.
@@ -31,7 +35,7 @@ Layout, in the order the pipeline runs:
                    with two labelling packets that preserve each judge's own
                    blindness regime. Never fabricates a label.
     metrics.py     the compact final metric set and the report. Refuses to
-                   aggregate a run the gate excluded, and never prints 0.0
+                   aggregate an ineligible run, and never prints 0.0
                    where it means "not computed".
 
 The two judges are deliberately disjoint. That is what makes
@@ -43,13 +47,15 @@ a reportable finding rather than a contradiction.
 Outputs are written here, never back into `eval/runs/` and never over the
 legacy grader's `eval/results.csv` or `eval/summary.md`:
 
-    valid_runs.jsonl                  one eligibility decision per run_id
+    artifact_validation.jsonl         deterministic artifact results
+    leakage_reviews.jsonl             semantic leakage evidence and labels
+    valid_runs.jsonl                  one policy decision per run_id
     diagnosis_judgments.jsonl         one diagnosis verdict per run_id
     trace_judgments.jsonl             three investigation labels per run_id
     calibration_trace_packet.md       for a human: label investigation, blind
     calibration_diagnosis_packet.md   for a human: label correctness, informed
     human_calibration.csv             the human answer sheet (never clobbered)
     judge_calibration.json            human-vs-judge agreement, once both exist
-    final_metrics.json                the metric set, machine readable
+    ../eval_results.json              canonical machine-readable result
     final_report.md                   the same thing, for a human
 """

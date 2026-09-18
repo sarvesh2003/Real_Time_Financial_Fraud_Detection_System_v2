@@ -1,4 +1,9 @@
-# Validity gate
+# Deterministic validity diagnostics
+
+This package reports mechanical experiment issues. It no longer decides which
+runs enter semantic evaluation. Eligibility lives in
+`eval/semantic_eval/eligibility_policy.py`, and semantic leakage review lives in
+`eval/semantic_eval/leakage_reviewer.py`.
 
 One question: **is this agent evaluation measuring what it claims to measure?**
 
@@ -25,7 +30,6 @@ re-litigated.
 | --- | --- |
 | `stimulus_validity` | Was the thing under test present when the agent observed? |
 | `context_integrity` | Did the agent receive what the harness sent? |
-| `leakage` | Could the answer be produced without doing the work? |
 | `behavioral_evidence` | Did the agent actually do the work it got credit for? |
 | `scoring_integrity` | Is the score computed from model output only? |
 | `comparability` | Are pooled rows the same experiment? |
@@ -56,10 +60,6 @@ structures it has to produce; the short version is in
 
 The concepts that carry the most weight:
 
-- **free context** (`TextSource.free`). Text that reached the model without
-  the agent choosing to fetch it: instructions, tool schemas, a scripted warm
-  up sweep, injected retrieval results. Be generous about what counts. The
-  leakage check is only as good as this flag.
 - **provenance** (`ScoredText.provenance`). Who wrote each field the grader
   reads. `model`, `human`, `harness` or `unknown`, and `unknown` is treated as
   not-model.
@@ -81,24 +81,8 @@ the evaluation is clean.
 
 One decorated function. Nothing else is wired.
 
-```python
-# eval/validity/checks/leakage.py
-
-@check(
-    check_id="answer_reachable_from_free_context",
-    failure_class="leakage",
-    title="Full credit is not constructible from free context",
-    invariant=(
-        "No run may have every component its grader requires for full credit "
-        "present in text the agent received without spending an action."
-    ),
-)
-def answer_reachable_from_free_context(m: Manifest) -> Iterable[Finding]:
-    if not any(m.free_context_for(r) for r in m.included()):
-        raise SkipCheck("requires free context; populate Run.free_context")
-    ...
-    yield Finding(severity="fail", message="...", run_ids=(run.run_id,))
-```
+Checks in this package must remain deterministic. Semantic judgements belong in
+the semantic-evaluation reviewer layer.
 
 Rules, in descending order of how much trouble breaking them causes:
 

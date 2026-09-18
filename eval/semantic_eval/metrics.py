@@ -67,12 +67,14 @@ import argparse
 import json
 import statistics
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from eval.aggregate import wilson_ci
 
+from .artifact_validator import validate_runs
 from .artifacts import NUMERIC_FIELDS, RUNS_DIR, LoadedRun, is_recorded, load_runs
 from .calibration import (
     HUMAN_CALIBRATION_CSV,
@@ -82,13 +84,16 @@ from .calibration import (
     load_judge_labels,
 )
 from .diagnosis_judge import JUDGMENTS_JSONL, DiagnosisLabel
-from .gate import GateReport, assert_eligible, run_gate
+from .eligibility_policy import EligibilityReport, assert_eligible, run_policy
 from .ground_truth import GroundTruthError, load_ground_truth
+from .judge_client import JUDGE_TEMPERATURE
+from .leakage_reviewer import LeakageLabel, load_reviews
 from .trace_judge import DIMENSIONS as TRACE_DIMENSIONS
 from .trace_judge import TRACE_JUDGMENTS_JSONL, TraceLabel
 
 OUTPUT_DIR = Path(__file__).resolve().parent
-FINAL_METRICS_JSON = OUTPUT_DIR / "final_metrics.json"
+
+EVAL_RESULTS_JSON = OUTPUT_DIR.parent / "eval_results.json"
 FINAL_REPORT_MD = OUTPUT_DIR / "final_report.md"
 
 # The agent's own confidence vocabulary, in descending strength. Fixed order so
@@ -560,7 +565,7 @@ class FinalMetrics:
             "known_limitations": list(self.limitations),
         }
 
-    def write_json(self, path: Path | str = FINAL_METRICS_JSON) -> Path:
+    def write_json(self, path: Path | str) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.as_dict(), indent=2) + "\n", encoding="utf-8")
@@ -568,7 +573,7 @@ class FinalMetrics:
 
 
 def _limitations(
-    gate: GateReport, runs: Sequence[LoadedRun], diagnosis: DiagnosisMetrics
+    gate: EligibilityReport, runs: Sequence[LoadedRun], diagnosis: DiagnosisMetrics
 ) -> tuple[str, ...]:
     """
     Stated in the report, derived from what this run of the pipeline found.
@@ -612,28 +617,6 @@ def _limitations(
             "ranking or improvement claim is supportable at this size."
         )
 
-    # Leakage the gate's phrase-mirroring check cannot see, read off the
-    # rubric's own per-fault declaration.
-    declared: list[str] = []
-    for run in runs:
-        if not is_recorded(run.fault_id):
-            continue
-        try:
-            gt = load_ground_truth(str(run.fault_id))
-        except GroundTruthError:
-            continue
-        if gt.baseline_sufficiency == "sufficient":
-            declared.append(run.run_id)
-    if declared:
-        items.append(
-            f"{len(declared)} of {len(runs)} eligible run(s) belong to faults whose "
-            "`rubric.yaml` entry declares `baseline_sufficiency: sufficient` - the free "
-            "baseline sweep alone contains the answer, so the agent could answer "
-            "without investigating. The gate's `answer_reachable_from_free_context` "
-            "check did not exclude them because it mirrors the legacy grader's exact "
-            "phrases. Affected: " + ", ".join(sorted(declared)) + "."
-        )
-
     transient: list[str] = []
     for run in runs:
         if not is_recorded(run.fault_id):
@@ -673,13 +656,13 @@ def _limitations(
 
 def build_final_metrics(
     runs: Sequence[LoadedRun],
-    gate: GateReport,
+    gate: EligibilityReport,
     diagnosis: Sequence,
     trace: Sequence,
     calibration_status: str,
 ) -> FinalMetrics:
     """
-    Assemble everything, refusing to aggregate a run the gate excluded.
+    Assemble everything, refusing to aggregate an ineligible run.
 
     `assert_eligible` is called on both judgement sets, so "invalid runs do not
     enter the metrics" is enforced by the program rather than asserted in prose.
@@ -736,8 +719,9 @@ def render_report(m: FinalMetrics) -> str:
     L.append("# Diagnostic agent: post-hoc evaluation")
     L.append("")
     L.append(
-        "Semantic evaluation over historical fault-injection runs. The validity gate "
-        "runs first, so contaminated or malformed experiments never reach a "
+        "Semantic evaluation over historical fault-injection runs. Artifact validation "
+        "and semantic leakage review run first, so confirmed leakage and malformed data "
+        "do not reach a "
         "performance number. Diagnosis correctness is judged against the actual "
         "injection script; investigation quality is judged separately and blind to it."
     )
@@ -754,7 +738,7 @@ def render_report(m: FinalMetrics) -> str:
     L.append(f"| stage | runs |")
     L.append(f"| --- | --- |")
     L.append(f"| discovered in the published population | {p.discovered} |")
-    L.append(f"| excluded by the validity gate | {p.excluded} |")
+    L.append(f"| excluded by the eligibility policy | {p.excluded} |")
     L.append(f"| **eligible for judging** | **{p.eligible}** |")
     L.append(f"| of those, trace-gradable | {p.trace_judgeable} |")
     L.append(f"| diagnosis actually judged | {p.diagnosis_judged} |")
@@ -966,12 +950,14 @@ def _load_results(path: Path, cls) -> list:
                 _DiagRow(
                     run_id=row["run_id"],
                     label=DiagnosisLabel(row["label"]) if row.get("label") else None,
+                    judge_model=row.get("judge_model"),
                 )
             )
         else:
             out.append(
                 _TraceRow(
                     run_id=row["run_id"],
+                    judge_model=row.get("judge_model"),
                     **{
                         dim: TraceLabel(row[dim]) if row.get(dim) else None
                         for dim in TRACE_DIMENSIONS
@@ -985,15 +971,112 @@ def _load_results(path: Path, cls) -> list:
 class _DiagRow:
     run_id: str
     label: DiagnosisLabel | None
+    judge_model: str | None = None
 
 
 @dataclass(frozen=True)
 class _TraceRow:
     run_id: str
+    judge_model: str | None = None
     evidence_support: TraceLabel | None = None
     causal_reasoning: TraceLabel | None = None
     investigation_quality: TraceLabel | None = None
 
+
+def build_eval_results(
+    metrics: FinalMetrics,
+    runs: Sequence[LoadedRun],
+    gate: EligibilityReport,
+    diagnosis: Sequence,
+    trace: Sequence,
+) -> dict:
+    artifact_report = validate_runs(runs)
+    invalid_artifacts = [run for run in artifact_report.runs if not run.valid]
+    artifact_issue_counts: dict[str, int] = {}
+    for run in artifact_report.runs:
+        for issue in run.issues:
+            artifact_issue_counts[issue.code] = artifact_issue_counts.get(issue.code, 0) + 1
+
+    reviews = load_reviews()
+    leakage_counts = {label.value: 0 for label in LeakageLabel}
+    for review in reviews.values():
+        leakage_counts[review.label.value] += 1
+
+    def models(rows: Sequence) -> list[str]:
+        return sorted(
+            {
+                model
+                for row in rows
+                if (model := getattr(row, "judge_model", None))
+            }
+        )
+
+    result = {
+        "schema_version": "1.0",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "status": (
+            "final"
+            if metrics.calibration_status == "complete"
+            else "provisional_awaiting_human_calibration"
+        ),
+        "evaluation": {
+            "pipeline": "semantic_eval",
+            "judge_models": {
+                "leakage_review": sorted({review.judge_model for review in reviews.values()}),
+                "diagnosis": models(diagnosis),
+                "trace": models(trace),
+            },
+            "judge_temperature": JUDGE_TEMPERATURE,
+            "structured_output": "json",
+            "exposed_thinking": False,
+            "statistical_interval": "two-sided Wilson score interval",
+            "confidence_level": 0.95,
+        },
+        "validation": {
+            "artifacts": {
+                "total": len(artifact_report.runs),
+                "valid": len(artifact_report.runs) - len(invalid_artifacts),
+                "invalid": len(invalid_artifacts),
+                "invalid_run_ids": [run.run_id for run in invalid_artifacts],
+                "issue_counts": dict(sorted(artifact_issue_counts.items())),
+            },
+            "leakage_review": {
+                "reviewed": len(reviews),
+                "counts": leakage_counts,
+                "blocking_label": LeakageLabel.CONFIRMED_LEAK.value,
+                "excluded_run_ids": sorted(
+                    review.run_id
+                    for review in reviews.values()
+                    if review.label is LeakageLabel.CONFIRMED_LEAK
+                ),
+                "error_run_ids": sorted(
+                    review.run_id for review in reviews.values() if review.error
+                ),
+            },
+            "eligibility": {
+                **gate.as_dict(),
+                "eligible_run_ids": list(gate.eligible_run_ids),
+                "excluded_run_ids": [run.run_id for run in gate.excluded],
+            },
+        },
+        **metrics.as_dict(),
+    }
+    return result
+
+
+def write_eval_results(
+    metrics: FinalMetrics,
+    runs: Sequence[LoadedRun],
+    gate: EligibilityReport,
+    diagnosis: Sequence,
+    trace: Sequence,
+    path: Path | str = EVAL_RESULTS_JSON,
+) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    result = build_eval_results(metrics, runs, gate, diagnosis, trace)
+    path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return path
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Final metrics and report.")
@@ -1001,7 +1084,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true", help="write the JSON and the report")
     args = parser.parse_args(argv)
 
-    gate = run_gate(args.runs_dir)
+    gate = run_policy(args.runs_dir)
     runs = load_runs(args.runs_dir)
 
     diagnosis = _load_results(JUDGMENTS_JSONL, DiagnosisLabel)
@@ -1017,7 +1100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     metrics = build_final_metrics(runs, gate, diagnosis, trace, status)
     print(render_report(metrics))
     if args.write:
-        print(f"\nwrote {metrics.write_json()}")
+        print(f"\nwrote {write_eval_results(metrics, runs, gate, diagnosis, trace)}")
         print(f"wrote {write_report(metrics)}")
     return 0
 

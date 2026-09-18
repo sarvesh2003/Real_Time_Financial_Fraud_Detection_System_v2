@@ -3,7 +3,7 @@ Check registration and execution.
 
 WHY A REGISTRY AT ALL
 ---------------------
-The useful property of a validity gate is that it accumulates. Every time a
+The useful property of deterministic validity diagnostics is that they accumulate. Every time a
 defect gets past review, someone should be able to turn that specific
 embarrassment into a permanent, generic invariant in under an hour, and nobody
 should have to touch a dispatcher, a config file or the report writer to do it.
@@ -18,17 +18,14 @@ THE FOUR STATUSES, AND WHY SKIP IS NOT A PASS
     fail   the invariant is violated, do not publish
     skip   the manifest did not carry what this check needs
 
-Conflating skip with pass is the failure mode that makes gates worthless: the
-gate goes green because it looked at nothing. `run.py` prints skips as their
+Conflating skip with pass makes diagnostics misleading: the report looks clean
+because it examined nothing. `run.py` prints skips as their
 own section with the reason, and a run where most checks skipped should be
 read as "this harness is not instrumented for validity", not as a clean bill.
 
 SEVERITY IS ON THE FINDING, NOT THE CHECK
 -----------------------------------------
-A single invariant usually has a strong form and a weak one. "The answer is
-fully present in free context" and "half the answer is present" come from the
-same comparison and should be reported together, at different severities, so
-that the weak signal is visible without blocking a release on it.
+A single invariant can report strong and weak forms at different severities.
 """
 
 from __future__ import annotations
@@ -99,14 +96,13 @@ class CheckResult:
 _REGISTRY: list[CheckSpec] = []
 
 # The taxonomy, in the order a reader should meet it: was the stimulus there,
-# did the prompt arrive, was the answer given away, was work done, was the
+# did the prompt arrive, was work done, was the
 # score honest, are the rows the same experiment, can the metric mean what it
 # says. Ordering lives here rather than in run.py so that adding a class is a
 # one line change next to the checks that use it.
 CLASS_ORDER = (
     "stimulus_validity",
     "context_integrity",
-    "leakage",
     "behavioral_evidence",
     "scoring_integrity",
     "comparability",
@@ -116,7 +112,6 @@ CLASS_ORDER = (
 CLASS_QUESTION = {
     "stimulus_validity": "Was the thing under test present when the agent observed?",
     "context_integrity": "Did the agent receive what the harness sent?",
-    "leakage": "Could the answer be produced without doing the work?",
     "behavioral_evidence": "Did the agent actually do the work it got credit for?",
     "scoring_integrity": "Is the score computed from model output only?",
     "comparability": "Are pooled rows the same experiment?",
