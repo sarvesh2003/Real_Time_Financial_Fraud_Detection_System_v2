@@ -21,87 +21,32 @@ The agent is the specimen. The harness is the point.
 | Agent | [agent/graph.py](agent/graph.py) | LangGraph StateGraph (baseline, investigate, tool_call, conclude) with a 15-call tool budget and a cross-tool corroboration gate on its confidence label |
 | Retrieval | [corpus/build_index.py](corpus/build_index.py) | Chroma index over a past-incident corpus, ablatable on and off per run |
 | Fault injection | [fault-injection/](fault-injection/) | 16 reproducible faults across 4 families (Redis, Kafka, network, config), each with inject and restore |
-| Grading | [eval/grade.py](eval/grade.py), [eval/rubric.yaml](eval/rubric.yaml) | Rubric scoring (2/1/0/-1), human override file, blind review queue |
-| Aggregation | [eval/aggregate.py](eval/aggregate.py) | Wilson 95% intervals, cost-weighted skill score, retrieval Hit@1 and MRR |
+| Artifact validation | [eval/semantic_eval/artifact_validator.py](eval/semantic_eval/artifact_validator.py) | Deterministic integrity and provenance checks before semantic review |
+| Leakage review | [eval/semantic_eval/leakage_reviewer.py](eval/semantic_eval/leakage_reviewer.py) | Evidence-first semantic review of information available before the agent acted |
+| Eligibility | [eval/semantic_eval/eligibility_policy.py](eval/semantic_eval/eligibility_policy.py) | Excludes confirmed leakage and hard artifact failures before scoring |
+| Semantic judging | [eval/semantic_eval/diagnosis_judge.py](eval/semantic_eval/diagnosis_judge.py), [eval/semantic_eval/trace_judge.py](eval/semantic_eval/trace_judge.py) | Separates diagnosis correctness from ground-truth-blind trace quality |
+| Metrics | [eval/semantic_eval/metrics.py](eval/semantic_eval/metrics.py) | Produces canonical metrics with Wilson 95% confidence intervals |
 
-**Current dataset:** 38 graded runs across 6 model environments.
+**Current dataset:** 38 historical runs across 6 model environments. Eight runs were
+excluded for confirmed leakage, leaving 30 eligible diagnosis evaluations. Results remain
+provisional until the LLM judges are calibrated against human labels.
 
 ### The validity gate
 
-Running the harness produced accuracy numbers that looked reasonable. They were not
-trustworthy, so the next piece built was a gate that asks a different question: **is this
-evaluation measuring what it claims to measure?** It does not score the agent. It decides
-whether any result is publishable at all.
+The current gate has three explicit stages:
 
-Seven failure classes, derived by walking the evaluation pipeline and asking what failure
-looks like at each step:
+1. Validate artifact structure and provenance deterministically.
+2. Ask an LLM reviewer to extract leakage evidence before assigning a categorical label.
+3. Apply one eligibility policy before either semantic judge runs.
 
-| Class | Question |
-|---|---|
-| `stimulus_validity` | Was the thing under test present when the agent observed? |
-| `context_integrity` | Did the agent receive what the harness sent? |
-| `leakage` | Could the answer be produced without doing the work? |
-| `behavioral_evidence` | Did the agent do the work it got credit for? |
-| `scoring_integrity` | Is the score computed from model output only? |
-| `comparability` | Are pooled rows the same experiment? |
-| `metric_soundness` | Can this metric mean what its label says? |
+Confirmed leakage and hard artifact failures are excluded from performance metrics.
+Diagnosis correctness and investigation quality are then judged independently.
 
-16 deterministic checks read a normalized run manifest, so all repo-specific knowledge
-lives in a single adapter ([eval/validity/adapter.py](eval/validity/adapter.py)). No LLM
-is involved: these are questions about provenance and arithmetic, decidable from the
-artifacts.
+Current outputs:
 
-```
-python eval/validity/run.py     ->  exit 1, results not publishable
-```
-
-### What it found
-
-Nine validity defects, each verified against run artifacts. The three that matter most:
-
-- **An entire model arm never received its prompt.** Six runs reported exactly 2050 input
-  tokens across three different faults while comparable runs reported 5,361 to 6,676. The
-  provider's default context window had truncated the prompt, so that model never saw the
-  evidence log and answered from the system prompt alone. The check that caught it uses no
-  hardcoded number: it fires on an identical prompt size across materially different
-  inputs, combined with that value sitting below every other run's floor.
-- **The answer was reachable without investigating.** The free baseline sweep handed to
-  every agent contains the complete scoring answer for three faults, making 12 of 26
-  automated runs scoreable with zero tool calls. The system prompt and several MCP tool
-  docstrings leak complete answer sets for six more.
-- **The retrieval corpus is an answer key.** All five documents state rubric mechanisms
-  verbatim for faults they were not even written about. Turning retrieval on turns an
-  answer key on, so **no retrieval result from this dataset is claimable.**
-
-The remaining six are in [MASTER.md](MASTER.md) section 12.
-
-### What survives
-
-Results are stratified rather than suppressed. Full detail in MASTER.md section 10a.
-
-- **Uncontaminated subset: n = 14.** Zero correct, 2 partial, 3 wrong, 9 abstained. The
-  agent solved none of the faults that were not contaminated.
-- **It fails safe.** 9 of 14 runs, 64%, declined to name a cause rather than naming a
-  wrong one. That is what the confidence gating was built to do.
-- **Null model floor: 2 of 6.** The truncated arm is an accidental control: zero tool
-  calls, prior knowledge only. Under the original rubric it scored 33%, which is the floor
-  any real result has to clear.
-- **Grader error rate: about 18%.** Seven of 38 runs where human review disagreed with the
-  mechanical score, in both directions, each with its reasoning recorded in
-  [eval/score_overrides.csv](eval/score_overrides.csv).
-
-### Scope and honesty notes
-
-- The pipeline runs under Docker Compose on a single machine. It is **not** serving
-  production traffic, and the fault injection acts on local containers.
-- Sample sizes are small (38 runs, single-digit n per fault). Confidence intervals are
-  reported for that reason and are wide.
-- `rubric.yaml` was committed to version control at `5829c9f`, after faults 1 through 4
-  had already run. It is not pre-registered for those faults, and the file's own header
-  says so.
-
-**Full technical reference:** [MASTER.md](MASTER.md) covers the architecture, the tool
-contracts, the scoring model, a worked end-to-end example, and every known limitation.
+- [eval/eval_results.json](eval/eval_results.json) — canonical machine-readable metrics
+- [eval/semantic_eval/final_report.md](eval/semantic_eval/final_report.md) — concise report
+- [Evaluation guide](Chatgpt_Documentation/LLM_DIAGNOSTIC_AGENT_EVALUATION_GUIDE.md) — architecture, commands, methodology, and limitations
 
 ---
 
@@ -413,7 +358,8 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/fraud/v
 ├── corpus/                          # Chroma past-incident index
 ├── fault-injection/                 # 16 faults, inject + restore
 ├── eval/                            # Rubric, grading, aggregation, results
-└── MASTER.md                        # Full technical reference
+├── eval/eval_results.json           # Canonical semantic-evaluation metrics
+└── Chatgpt_Documentation/           # Current architecture and evaluation guides
 ```
 
 ## References
