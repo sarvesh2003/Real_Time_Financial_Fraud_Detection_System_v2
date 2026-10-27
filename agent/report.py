@@ -1,18 +1,25 @@
-"""Pure result construction from one completed investigation trace."""
+"""Pure result construction from one investigation trace.
 
+Schema 2.1 adds llm_attempts, model_settings and the "interrupted" status
+to 2.0; every 2.0 field keeps its name and meaning.
+"""
+
+import hashlib
+import json
 from urllib.parse import urlparse
 
-from config import AgentConfig
-from graph import TOOL_CALL_BUDGET
+from agent.config import AgentConfig
+from agent.graph import TOOL_CALL_BUDGET
 
 
 def build_result(
     config: AgentConfig, trigger: str, final_state: dict | None, wall_clock_s: float,
     status: str, error_type: str = "", traceback_tail: str = "",
     vram_pre: dict | None = None, vram_post: dict | None = None,
+    tool_specs: list[dict] | None = None,
 ) -> dict:
     result: dict = {
-        "schema_version": "2.0",
+        "schema_version": "2.1",
         "run_id": config.run_tag,
         "env_label": config.env_label,
         "retrieval_mode": config.retrieval_mode,
@@ -26,12 +33,15 @@ def build_result(
         "wall_clock_s": wall_clock_s,
         "vram_pre": vram_pre,
         "vram_post": vram_post,
+        "model_settings": config.model_settings.as_dict(),
+        "tool_schema_sha256": hashlib.sha256(
+            json.dumps(tool_specs or [], sort_keys=True).encode("utf-8")).hexdigest(),
     }
 
     if final_state is None:
         result.update({
             "calls_used": None, "budget_exhausted": None,
-            "llm_calls": 0, "llm_ms_total": 0.0, "tool_ms_total": 0.0,
+            "llm_calls": 0, "llm_attempts": 0, "llm_ms_total": 0.0, "tool_ms_total": 0.0,
             "input_tokens_total": 0, "output_tokens_total": 0,
             "truncated_retries": 0, "empty_retries": 0, "baseline_evidence_count": 0,
             "tool_call_sequence": [],
@@ -77,6 +87,8 @@ def build_result(
         "calls_used": final_state.get("calls_used"),
         "budget_exhausted": final_state.get("calls_used", 0) >= TOOL_CALL_BUDGET,
         "llm_calls": len(llm_events),
+        # A logical turn that was retried after a truncated/empty reply counts twice.
+        "llm_attempts": sum(e.get("attempts", 1) for e in llm_events),
         "llm_ms_total": sum(e.get("llm_ms", 0) or 0 for e in llm_events),
         "tool_ms_total": sum(e.get("tool_ms", 0) or 0 for e in tool_events),
         "input_tokens_total": sum(e.get("input_tokens") or 0 for e in llm_events),

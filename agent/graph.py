@@ -1,27 +1,25 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, TypedDict, TypeVar
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
-from tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
+from agent.tools import observe, usable_evidence
 
 AGENT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = AGENT_DIR.parent
 SYSTEM_PROMPT = (AGENT_DIR / "system_prompt.md").read_text(encoding="utf-8")
-CHROMA_DIR = REPO_ROOT / "corpus" / "chroma_db"
 COLLECTION_NAME = "fault_investigations"
 
+# Counts the two baseline observations and duplicate attempts. Kept as an int
+# literal: the historical validity checker in eval/ parses it from this file.
 TOOL_CALL_BUDGET = 15
 CORROBORATION_THRESHOLD = 2
-EVIDENCE_RESULT_CHAR_CAP = MAX_OBSERVATION_CHARS
 RETRIEVAL_DISTANCE_CUTOFF = 1.0
 
 
@@ -92,51 +90,53 @@ def llm_call_meta(response, t0: float) -> dict:
     }
 
 
-async def ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) -> tuple[SchemaT, dict, str]:
-    schema_json = json.dumps(schema.model_json_schema(), indent=2)
-    instruction = HumanMessage(content=(
+def json_instruction(schema: type[BaseModel]) -> HumanMessage:
+    return HumanMessage(content=(
         "Respond with ONLY a single valid JSON object matching this schema - "
-        f"no markdown code fences, no explanation, no text before or after it:\n{schema_json}"
+        "no markdown code fences, no explanation, no text before or after it:\n"
+        f"{json.dumps(schema.model_json_schema(), indent=2)}"
     ))
-    t0 = time.monotonic()
-    response = await llm.ainvoke([*messages, instruction])
-    llm_meta = llm_call_meta(response, t0)
-    text = response.content.strip()
 
+
+def parse_json_reply(schema: type[SchemaT], content: str) -> SchemaT:
+    """Parse a model's JSON reply, tolerating fences, surrounding prose, a
+    single wrapping key, or the schema's "properties" layout copied back.
+    Raises ValueError when none of these yields a valid object."""
+    text = content.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
-
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end == -1:
-            raise ValueError(
-                f"Model returned no parseable JSON for {schema.__name__}. "
-                f"finish_reason={response.response_metadata.get('finish_reason')!r}, "
-                f"raw content={response.content!r}"
-            ) from e
-        data = json.loads(text[start:end + 1])
+            raise ValueError(f"no JSON object in the reply for {schema.__name__}") from None
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as error:
+            raise ValueError(f"unparseable JSON for {schema.__name__}: {error}") from None
 
-    try:
-        return schema.model_validate(data), llm_meta, response.content
-    except ValidationError as e:
-        if isinstance(data, dict) and len(data) == 1:
-            inner = next(iter(data.values()))
-            if isinstance(inner, dict):
-                try:
-                    return schema.model_validate(inner), llm_meta, response.content
-                except ValidationError:
-                    pass
-        if isinstance(data, dict) and isinstance(data.get("properties"), dict):
-            try:
-                return schema.model_validate(data["properties"]), llm_meta, response.content
-            except ValidationError:
-                pass
-        raise ValueError(f"Model's JSON didn't match {schema.__name__}'s schema. parsed={data!r}") from e
+    candidates = [data]
+    if isinstance(data, dict) and len(data) == 1 and isinstance(next(iter(data.values())), dict):
+        candidates.append(next(iter(data.values())))
+    if isinstance(data, dict) and isinstance(data.get("properties"), dict):
+        candidates.append(data["properties"])
+    for candidate in candidates:
+        try:
+            return schema.model_validate(candidate)
+        except ValidationError:
+            continue
+    raise ValueError(f"JSON did not match {schema.__name__}: {data!r}")
+
+
+def render_evidence(evidence_log: list[EvidenceEntry]) -> str:
+    return "\n".join(
+        f"{i}. [{e['observed_at']} {e['tool_name']}({e['args']})] {e['result']}"
+        for i, e in enumerate(evidence_log)
+    )
 
 
 def retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
@@ -178,11 +178,7 @@ def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool 
         }
 
     def investigate_prompt(state: InvestigationState) -> tuple[str, list[RetrievedCase]]:
-        evidence_lines = [
-            f"{i}. [{e['observed_at']} {e['tool_name']}({e['args']})] {e['result']}"
-            for i, e in enumerate(state["evidence_log"])
-        ]
-        evidence_text = "\n".join(evidence_lines) or "(none gathered yet)"
+        evidence_text = render_evidence(state["evidence_log"]) or "(none gathered yet)"
 
         recent_result_text = " ".join(e["result"][:300] for e in state["evidence_log"][-3:])
         query_text = f"{state['trigger']} {recent_result_text}".strip()
@@ -273,6 +269,7 @@ def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool 
             "action_selected", node="investigate", action=action,
             calls_used=state["calls_used"], truncated_retry=truncated_retry,
             empty_retry=empty_retry,
+            attempts=2 if initial_model_response else 1,
             agent_visible_prompt=prompt,
             model_response={"content": response.content, "tool_calls": response.tool_calls,
                             "finish_reason": response.response_metadata.get("finish_reason")},
@@ -327,10 +324,7 @@ def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool 
         }
 
     async def conclude(state: InvestigationState) -> dict:
-        evidence_text = "\n".join(
-            f"{i}. [{e['observed_at']} {e['tool_name']}({e['args']})] {e['result']}"
-            for i, e in enumerate(state["evidence_log"])
-        ) or "(no tool evidence gathered)"
+        evidence_text = render_evidence(state["evidence_log"]) or "(no tool evidence gathered)"
         budget_note = (
             "Budget exhausted." if state["calls_used"] >= TOOL_CALL_BUDGET
             else f"{TOOL_CALL_BUDGET - state['calls_used']} tool calls remained unused."
@@ -350,18 +344,25 @@ def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool 
                     "distinct tools (e.g. get_metrics AND read_config, not two query_logs calls) - "
                     "cite every piece of evidence that genuinely backs your conclusion, not just one."
         )
+        # A failed model call (timeout, refused connection) propagates, and the
+        # run is recorded as crashed. Only an unusable reply is a parse failure.
+        t0 = time.monotonic()
+        response = await llm.ainvoke([
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=final_prompt),
+            json_instruction(ConcludeOut),
+        ])
+        llm_meta = llm_call_meta(response, t0)
+        raw_response = str(response.content)
         try:
-            result, llm_meta, raw_response = await ask_for_json(llm, ConcludeOut, [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=final_prompt),
-            ])
-        except Exception as e:
+            result = parse_json_reply(ConcludeOut, raw_response)
+        except ValueError as e:
             conclusion = {
                 "root_cause_id": "PARSE_FAILURE",
                 "summary": "",
                 "confidence": "inconclusive",
                 "model_self_reported_confidence": "inconclusive",
-                "reasoning": f"conclude() failed: {type(e).__name__}: {e}",
+                "reasoning": f"conclude() failed: {e}",
                 "cited_evidence_indices": [],
                 "distinct_supporting_tools": [],
                 "calls_used": state["calls_used"],
@@ -372,7 +373,7 @@ def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool 
                 "conclusion", node="conclude", conclusion=conclusion, parse_failure=True,
                 agent_visible_prompt=final_prompt,
                 response_schema=ConcludeOut.model_json_schema(),
-                llm_ms=0.0, input_tokens=None, output_tokens=None, finish_reason=None,
+                model_response=raw_response, **llm_meta,
             )
             return {"conclusion": conclusion, "trace": state["trace"] + [event]}
 

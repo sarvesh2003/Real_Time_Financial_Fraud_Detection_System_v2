@@ -1,13 +1,10 @@
 """Contracts that must hold before any model experiment starts."""
 
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
-from config import AgentConfig
-from tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
+from agent.config import AgentConfig
+from agent.tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
 
 
 class AgentConfigTests(unittest.TestCase):

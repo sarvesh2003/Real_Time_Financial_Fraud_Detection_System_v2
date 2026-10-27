@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from agent.config import AgentConfig
 from experiments.stack import PROJECT, isolated_env
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -289,9 +290,8 @@ def run_case(case: Case, retrieval: str) -> Path:
         "source_commit": source.stdout.strip() if source.returncode == 0 else None,
         "source_dirty": bool(dirty.stdout.strip()),
         "retrieval_mode": retrieval,
-        "model_id": os.environ.get("MODEL_ID") or os.environ.get("OLLAMA_MODEL"),
-        "model_settings": {"temperature": 0.2, "max_tokens": 8192,
-                           "timeout_seconds": 120, "max_retries": 2},
+        "model_id": os.environ.get("MODEL_ID"),
+        "model_settings": None,
         "traffic_profile": {key: isolated_env()[key] for key in
                             ("TRAFFIC_SEED", "TRAFFIC_INTERVAL_SECONDS",
                              "TRAFFIC_FRAUD_PROBABILITY", "TRAFFIC_USER_LIMIT")},
@@ -302,8 +302,11 @@ def run_case(case: Case, retrieval: str) -> Path:
     write_manifest(manifest_path, manifest)
     injected = False
     try:
-        if not os.environ.get("MODEL_BASE_URL") and not os.environ.get("OLLAMA_BASE_URL"):
-            raise RuntimeError("MODEL_BASE_URL is required for an agent run")
+        # Same validation and settings the agent will use; fails before injection.
+        agent_config = AgentConfig.from_env({**isolated_env(), "RUN_TAG": run_id,
+                                             "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
+        manifest["model_id"] = agent_config.model_id
+        manifest["model_settings"] = agent_config.model_settings.as_dict()
         if retrieval == "on":
             error = verify_retrieval_corpus(case)
             if error:
@@ -349,7 +352,7 @@ def run_case(case: Case, retrieval: str) -> Path:
         env.update({"RUN_TAG": run_id, "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
         manifest["agent_started_at_utc"] = utc_now()
         write_manifest(manifest_path, manifest)
-        result = command([agent_python(), str(ROOT / "agent" / "run.py")], timeout=1800, env=env)
+        result = command([agent_python(), "-m", "agent.run"], timeout=1800, env=env)
         manifest["agent_ended_at_utc"] = utc_now()
         (run_dir / "agent.stdout.log").write_text(result.stdout, encoding="utf-8")
         (run_dir / "agent.stderr.log").write_text(result.stderr, encoding="utf-8")
