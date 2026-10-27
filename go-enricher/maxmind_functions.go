@@ -59,10 +59,11 @@ func (g *geoIP) lookup(ip string) (GeoData, error) {
 	}, nil
 }
 
+// keywords are lower-case and non-empty (see configFromEnv).
 func isHostingProvider(organization string, keywords []string) bool {
 	organization = strings.ToLower(organization)
 	for _, keyword := range keywords {
-		if strings.Contains(organization, strings.TrimSpace(keyword)) {
+		if strings.Contains(organization, keyword) {
 			return true
 		}
 	}

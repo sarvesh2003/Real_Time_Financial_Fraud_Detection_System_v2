@@ -47,12 +47,20 @@ func configFromEnv() (enricherConfig, error) {
 		return config, fmt.Errorf("invalid KAFKA_OFFSET_RESET %q", config.offsetReset)
 	}
 	if value := os.Getenv("GEO_TTL_HOURS"); value != "" {
-		if hours, err := strconv.Atoi(value); err == nil {
-			config.geoCacheTTL = time.Duration(hours) * time.Hour
+		hours, err := strconv.Atoi(value)
+		if err != nil || hours < 1 {
+			// Zero would cache forever in Redis; reject rather than guess.
+			return config, fmt.Errorf("GEO_TTL_HOURS must be a positive integer, got %q", value)
 		}
+		config.geoCacheTTL = time.Duration(hours) * time.Hour
 	}
 	if value := os.Getenv("HOSTING_KEYWORDS"); value != "" {
-		config.hostingKeywords = strings.Split(value, ",")
+		config.hostingKeywords = nil
+		for _, keyword := range strings.Split(value, ",") {
+			if keyword = strings.ToLower(strings.TrimSpace(keyword)); keyword != "" {
+				config.hostingKeywords = append(config.hostingKeywords, keyword)
+			}
+		}
 	}
 	return config, nil
 }
