@@ -4,18 +4,16 @@ WORKDIR /app
 
 RUN apk add --no-cache git build-base
 
-COPY go-server/go.mod go-server/go.sum ./
+COPY go.mod go.sum ./
 RUN go mod download
 
-COPY pb/proto/fraud/v1/ ./pb/
+COPY pb/ ./pb/
+COPY internal/ ./internal/
 
-COPY go-server/server.go .
-COPY go-server/metrics.go .
-COPY go-enricher/redis_functions.go .
-COPY go-enricher/models.go .
+COPY go-server/ ./go-server/
 
 ENV CGO_ENABLED=1
-RUN go build -tags musl -o fraud-server .
+RUN go build -tags musl -o fraud-server ./go-server
 
 EXPOSE 50051
 CMD ["./fraud-server"]

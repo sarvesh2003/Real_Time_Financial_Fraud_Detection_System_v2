@@ -1,0 +1,37 @@
+{
+  "acknowledged": 100,
+  "all_outputs_observed_wall_seconds": 49.111,
+  "created_at_utc": "2026-10-11T02:31:49.598148+00:00",
+  "dead_letter_records_delta": 0,
+  "duplicate_output_ids": [],
+  "enriched_records_delta": 100,
+  "grpc_ack_p50_ms": 41.561,
+  "grpc_ack_p99_ms": 781.035,
+  "grpc_batch_wall_seconds": 1.408,
+  "missing_ids": [],
+  "offsets_after": {
+    "enriched_transactions": {
+      "0": 34,
+      "1": 37,
+      "2": 29
+    },
+    "raw_transactions": {
+      "0": 50,
+      "1": 40,
+      "2": 10
+    },
+    "raw_transactions_dlq": {}
+  },
+  "offsets_before": {
+    "enriched_transactions": {},
+    "raw_transactions": {},
+    "raw_transactions_dlq": {}
+  },
+  "probe_id": "6e38e3cb34d14f8299a594ec1bed3f53",
+  "raw_records_delta": 100,
+  "request_failures": [],
+  "requested": 100,
+  "schema_version": "2.0",
+  "status": "passed",
+  "unexpected_ids": []
+}

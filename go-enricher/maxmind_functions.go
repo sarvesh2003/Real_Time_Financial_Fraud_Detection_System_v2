@@ -7,17 +7,15 @@ import (
 	"github.com/oschwald/geoip2-golang"
 )
 
-
-
 func initialize_maxmindDB() (*geoip2.Reader, *geoip2.Reader, func(), error) {
 	cityDb, err := geoip2.Open("/data/geoip/GeoLite2-City.mmdb")
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("Issues while opening City DB")
+		return nil, nil, nil, fmt.Errorf("open City DB: %w", err)
 	}
 	asnDB, err := geoip2.Open("/data/geoip/GeoLite2-ASN.mmdb")
 	if err != nil {
 		cityDb.Close()
-		return nil, nil, nil, fmt.Errorf("Issues while opening the ans db")
+		return nil, nil, nil, fmt.Errorf("open ASN DB: %w", err)
 	}
 
 	cleanup := func() {
@@ -30,10 +28,21 @@ func initialize_maxmindDB() (*geoip2.Reader, *geoip2.Reader, func(), error) {
 
 }
 
-func maxMindDBLookup(ip string, cityDb *geoip2.Reader, asnDB *geoip2.Reader) (*geoip2.City, *geoip2.ASN) {
-	ans := net.ParseIP(ip)
-	city, _ := cityDb.City(ans)
-	asn, _ := asnDB.ASN(ans)
-	return city, asn
+func maxMindDBLookup(ip string, cityDb *geoip2.Reader, asnDB *geoip2.Reader) (*geoip2.City, *geoip2.ASN, error) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || cityDb == nil || asnDB == nil {
+		return nil, nil, fmt.Errorf("invalid IP or unavailable GeoIP database")
+	}
+	city, err := cityDb.City(parsed)
+	if err != nil {
+		return nil, nil, fmt.Errorf("City lookup: %w", err)
+	}
+	asn, err := asnDB.ASN(parsed)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ASN lookup: %w", err)
+	}
+	if city == nil || asn == nil {
+		return nil, nil, fmt.Errorf("GeoIP database returned no record")
+	}
+	return city, asn, nil
 }
-

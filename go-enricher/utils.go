@@ -6,11 +6,10 @@ import (
 	"strings"
 )
 
-
 func isHostingProvider(isp string) bool {
 	keywordsEnv := os.Getenv("HOSTING_KEYWORDS")
 	var keywords []string
-	
+
 	if keywordsEnv != "" {
 		keywords = strings.Split(keywordsEnv, ",")
 	} else {
@@ -21,7 +20,7 @@ func isHostingProvider(isp string) bool {
 			"vpn", "proxy", "colocation",
 		}
 	}
-	
+
 	ispLower := strings.ToLower(isp)
 	for _, keyword := range keywords {
 		if strings.Contains(ispLower, strings.TrimSpace(keyword)) {
@@ -31,11 +30,10 @@ func isHostingProvider(isp string) bool {
 	return false
 }
 
-
 func validateIP(ip string) bool {
-	  ans := net.ParseIP(ip)
-	  if ans == nil {
+	ans := net.ParseIP(ip)
+	if ans == nil {
 		return false
-	  }
-	  return true
+	}
+	return true
 }

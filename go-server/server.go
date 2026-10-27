@@ -4,18 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"github.com/redis/go-redis/v9"
 
-	pb "fraud/pb"
+	pb "fraud/pb/proto/fraud/v1"
 )
 
 const (
@@ -25,7 +28,7 @@ const (
 
 type server struct {
 	pb.UnimplementedFraudIngestionServer
-	producer *kafka.Producer
+	producer    *kafka.Producer
 	redisClient *redis.ClusterClient
 }
 
@@ -33,101 +36,73 @@ var tokenBucketRateLimiting = redis.NewScript(`
 	local user_id = KEYS[1]
 	local rate = tonumber(ARGV[1])
 	local burst = tonumber(ARGV[2])
-	local now = tonumber(ARGV[3])
-	local window = tonumber(ARGV[4])
-
-	-- Check in redis for already present tokens and last refill time
+	local clock = redis.call("TIME")
+	local now = tonumber(clock[1]) + tonumber(clock[2]) / 1000000
 	local info = redis.call("HMGET", user_id, "tokens", "last_refill")
-	local curr_tokens = tonumber(info[1])
-	local last_refill = tonumber(info[2])
-
-	-- No already present tokens, new user
-	if not curr_tokens then
-		curr_tokens = burst
-		last_refill = now
+	local tokens = tonumber(info[1]) or burst
+	local last_refill = tonumber(info[2]) or now
+	tokens = math.min(burst, tokens + math.max(0, now - last_refill) * rate)
+	local allowed = 0
+	if tokens >= 1 then
+		tokens = tokens - 1
+		allowed = 1
 	end
-
-	local timeDiff = math.max(0, now - last_refill)
-	local refill = timeDiff * rate
-	curr_tokens = math.min(burst, curr_tokens + refill)
-
-	if curr_tokens < 1 then
-		return 0
-	else
-		-- I have sufficient tokens, so use it
-		redis.call("HMSET", user_id, "tokens", curr_tokens-1, "last_refill", now)
-		redis.call("EXPIRE", user_id, 60)
-		return 1
-	end
-
+	redis.call("HSET", user_id, "tokens", tokens, "last_refill", now)
+	redis.call("EXPIRE", user_id, 60)
+	return allowed
 `)
 
 func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest) (*pb.IngestionResponse, error) {
 	start := time.Now()
 	transactionsTotal.Inc()
-	defer func() {
-		transactionDuration.Observe(time.Since(start).Seconds())
-	}()
-
-	// Dedup key check
-	dedupKey := fmt.Sprintf("dedup:{%s}", req.TransactionId)
-	isNew, err := s.redisClient.SetNX(ctx, dedupKey, "1", 10*time.Minute).Result()
-	if err != nil {
-		log.Printf("WARNING: Some issue with Redis Dedup check: {%s}", err)
-		transactionErrorsTotal.WithLabelValues("redis_dedup").Inc()
-		return nil, status.Errorf(codes.Internal, "Internal Server Error")
-	}
-	if !isNew {
-		log.Printf("Transaction already present, so Skipping for: %s", req.TransactionId)
-		return &pb.IngestionResponse{Success: true, Message: "Already processed (Idempotent)"}, nil
+	defer transactionDuration.Observe(time.Since(start).Seconds())
+	if req.GetTransactionId() == "" || req.GetUserId() == "" || net.ParseIP(req.GetIpAddress()) == nil ||
+		math.IsNaN(req.GetAmount()) || math.IsInf(req.GetAmount(), 0) || req.GetAmount() < 0 {
+		transactionErrorsTotal.WithLabelValues("invalid_request").Inc()
+		return nil, status.Error(codes.InvalidArgument, "invalid transaction_id, user_id, ip_address, or amount")
 	}
 
-	// No Dedup key is present, so do the processing
-	rateLimitUser := fmt.Sprintf("rate_limit_user:{%s}", req.UserId)
-	// rateLimitIp := fmt.Sprintf("rate_limit_ip:{%s}", req.IpAddress)
-	burst_limit := 1000
-	rate_limit := 500
-
-	allowed, err := tokenBucketRateLimiting.Run(ctx, s.redisClient, []string{rateLimitUser}, burst_limit, rate_limit, time.Now().Unix(), 60).Int()
-
+	rateLimitUser := fmt.Sprintf("rate_limit_user:{%s}", req.GetUserId())
+	allowed, err := tokenBucketRateLimiting.Run(ctx, s.redisClient, []string{rateLimitUser}, 500, 1000).Int()
 	if err != nil {
-		s.redisClient.Del(ctx, dedupKey)
-		log.Printf("WARNING: Redis Rate Limit failed: %v", err)
 		transactionErrorsTotal.WithLabelValues("rate_limit_error").Inc()
-		return nil, status.Errorf(codes.Internal, "Rate Limit Check Failed")
-	} else if allowed == 0 {
-		s.redisClient.Del(ctx, dedupKey)
-		log.Printf("Rate Limit Exceeded for userId: %s", req.UserId)
+		return nil, status.Error(codes.Unavailable, "rate limit unavailable")
+	}
+	if allowed == 0 {
 		transactionErrorsTotal.WithLabelValues("rate_limit_exceeded").Inc()
-		return nil, status.Errorf(codes.ResourceExhausted, "Rate Limit Exceeded")
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
 
-	// Pushing to Kafka
-	bytes, err := proto.Marshal(req)
+	payload, err := proto.Marshal(req)
 	if err != nil {
 		transactionErrorsTotal.WithLabelValues("serialization").Inc()
-		return &pb.IngestionResponse{Success: false, Message: "Serialization failed"}, err
+		return nil, status.Error(codes.Internal, "serialization failed")
 	}
 
+	// Produce only queues locally. Wait for the broker's delivery event.
+	delivery := make(chan kafka.Event, 1)
 	err = s.producer.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &[]string{kafkaTopic}[0], Partition: kafka.PartitionAny},
-		Key:   []byte(req.UserId),
-		Value: bytes,
-	}, nil)
-
+		Key:            []byte(req.GetUserId()),
+		Value:          payload,
+	}, delivery)
 	if err != nil {
-		fmt.Printf("Kafka Error: %v\n", err)
-		transactionErrorsTotal.WithLabelValues("kafka_produce").Inc()
-		return &pb.IngestionResponse{Success: false, Message: "Kafka push failed"}, nil
+		transactionErrorsTotal.WithLabelValues("kafka_enqueue").Inc()
+		return nil, status.Error(codes.Unavailable, "Kafka enqueue failed")
 	}
-
-	// Marking as processed
-	// s.redisClient.SAdd(ctx, dedupKey, req.TransactionId)
-	s.redisClient.Expire(ctx, dedupKey, 10*time.Minute)
-
-	fmt.Printf("Received & Pushed: User=%d | Amt=%.2f\n", req.UserId, req.Amount)
-
-	return &pb.IngestionResponse{Success: true, Message: "Stored in Kafka"}, nil
+	select {
+	case event := <-delivery:
+		message, ok := event.(*kafka.Message)
+		if !ok || message.TopicPartition.Error != nil {
+			transactionErrorsTotal.WithLabelValues("kafka_delivery").Inc()
+			return nil, status.Error(codes.Unavailable, "Kafka delivery failed")
+		}
+	case <-ctx.Done():
+		// A timed-out request may still reach Kafka. Retries can create raw
+		// duplicates; the enricher must handle them by transaction_id.
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	return &pb.IngestionResponse{Success: true, Message: "Kafka acknowledged transaction"}, nil
 }
 
 func main() {
@@ -136,18 +111,28 @@ func main() {
 	if kafkaAddr == "" {
 		kafkaAddr = "localhost:9092"
 	}
-	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": kafkaAddr})
+	p, err := kafka.NewProducer(&kafka.ConfigMap{
+		"bootstrap.servers":   kafkaAddr,
+		"enable.idempotence":  true,
+		"acks":                "all",
+		"delivery.timeout.ms": 10000,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create producer: %v", err)
 	}
 	defer p.Close()
 
 	// REDIS CLUSTER SETUP
-	client, _ := initialize_redis()
+	redisCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	client, err := initializeRedis(redisCtx)
+	cancel()
+	if err != nil {
+		log.Fatalf("Redis initialization failed: %v", err)
+	}
+	defer client.Close()
 
 	// METRICS SERVER
 	startMetricsServer()
-
 
 	// Starting TCP Listener
 	lis, err := net.Listen("tcp", port)
@@ -158,7 +143,13 @@ func main() {
 	// Start gRPC Server
 	s := grpc.NewServer()
 	pb.RegisterFraudIngestionServer(s, &server{producer: p, redisClient: client})
-	
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-shutdownCtx.Done()
+		s.GracefulStop()
+	}()
+
 	log.Printf("Go gRPC Server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)

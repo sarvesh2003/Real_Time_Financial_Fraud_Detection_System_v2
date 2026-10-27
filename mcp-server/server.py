@@ -1,10 +1,8 @@
-import hashlib
 import json
 import os
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -12,11 +10,10 @@ from mcp.server.fastmcp import FastMCP
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yaml"
-CHANGELOG_FILE = REPO_ROOT / "fault-injection" / "changelog.jsonl"
 
 MAX_LOG_LINES = 500
 MAX_DATAPOINTS_PER_SERIES = 60
-MAX_SERIES = 25
+MAX_SERIES = 10
 
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 
@@ -63,41 +60,12 @@ def run_compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
 
 @mcp.tool()
 def query_logs(service: str, since: str, level: str | None = None, grep: str | None = None) -> str:
-    """Fetch logs for one service in the fraud pipeline.
+    """Read recent Docker logs for a named Compose service.
 
-    Args:
-        service: Compose service name, e.g. "go-server", "go-enricher", "kafka",
-            "redis1", "redis2", "redis3".
-        since: How far back to look, in Docker's own format — a duration like
-            "10m" or "2h", or an RFC3339 timestamp.
-        level: Optional substring filter, e.g. "ERROR" or "WARNING". Case-insensitive.
-            NOTE: most lines in this stack are unstructured and unleveled (plain
-            Go log.Printf with no severity prefix), and some of the most
-            diagnostic lines carry no level at all - e.g. the Go Redis client
-            reports failures as "redis: ... i/o timeout" with no ERROR prefix.
-            A level="ERROR" filter therefore CANNOT match them, no matter how
-            broken things are. go-server does emit some "WARNING:" lines, so
-            that filter is not useless, but treat an empty level-filtered
-            result as "my filter missed", never as "this service is fine".
-            Prefer `grep` over `level` for this stack.
-        grep: Optional regex filter applied to each log line. Case-insensitive.
-            Useful vocabulary actually present in this stack's logs:
-            "timeout", "i/o timeout", "deadline exceeded", "connection refused",
-            "refused", "no such host", "does not resolve", "rebalance",
-            "EOF", "retry", "WARNING", "panic".
-
-    Returns:
-        Matching log lines, newest last, one per line.
-
-        CAP: at most 500 lines are returned, and they are the NEWEST 500 -
-        everything older in your window is silently dropped. A busy service
-        here produces thousands of lines an hour, so a wide window can show
-        you only the last couple of minutes while looking like a full result.
-        This matters because a fault's first and most diagnostic lines usually
-        appear at the MOMENT it started, i.e. at the OLDEST end of your window
-        - exactly the part the cap discards. If you are looking for when
-        something began, narrow to a short window around that time or add a
-        grep filter, rather than widening the window.
+    `since` is a Docker duration such as 5m or an RFC3339 timestamp.
+    `level` is a case-insensitive substring; `grep` is a case-insensitive
+    regular expression. Returns at most the newest 500 matching lines and
+    marks truncation. An empty filtered result does not imply no logs exist.
     """
     result = run_compose("logs", "--no-color", f"--since={since}", "--", service)
 
@@ -144,47 +112,11 @@ def query_logs(service: str, since: str, level: str | None = None, grep: str | N
 
 @mcp.tool()
 def get_metrics(promql: str, window: str) -> str:
-    """Query Prometheus for a metric's trend over a recent time window.
+    """Query a PromQL expression over a recent duration such as 5m or 1h.
 
-    Args:
-        promql: A PromQL expression. This stack's own services export metrics
-            under the "fraud_" prefix (NOT "go_server_" or "go_enricher_" -
-            those are not real and will silently return nothing):
-
-              Latency (histograms - a fault can move these while every log
-              line stays clean, so check them before concluding "no errors,
-              nothing wrong"). Query with histogram_quantile, e.g.
-                histogram_quantile(0.99, sum(rate(
-                  fraud_server_transaction_duration_seconds_bucket[1m])) by (le))
-              - fraud_server_transaction_duration_seconds_bucket   (go-server)
-              - fraud_enricher_message_duration_seconds_bucket     (go-enricher)
-
-              Throughput / errors:
-              - fraud_server_transactions_total, fraud_server_transaction_errors_total
-              - fraud_enricher_messages_processed_total, fraud_enricher_errors_total
-              - fraud_enricher_duplicate_messages_total
-
-              Infrastructure (from exporters, not the apps):
-              - kafka_consumergroup_lag, kafka_consumergroup_members, kafka_brokers
-              - redis_evicted_keys_total, redis_memory_used_bytes, redis_up
-
-            This list is a starting point, not the full set. Don't guess a
-            name that isn't here - a name that doesn't exist returns the same
-            empty result as a real metric with no data, so guessing can't tell
-            "not happening" apart from "not a real metric". Use
-            list_metric_names first if you're not certain a name exists.
-            To check several related metrics in one call, use a regex label
-            match like '{__name__=~"redis_(evicted_keys_total|memory_used_bytes)"}'
-            - a plain "A or B" expression drops the metric name from the
-            result and silently collapses to a single series, so prefer the
-            __name__=~ form whenever you want more than one metric at once.
-        window: How far back to look, e.g. "5m", "15m", "1h".
-
-    Returns:
-        One line per label combination the query matches, each showing up to
-        60 evenly-spaced (timestamp, value) points across the window — enough
-        to see whether something is climbing, flat, or spiking, not a full
-        high-resolution dump.
+    Returns the newest points and range for at most 10 series. Earlier samples
+    are summarized so current fault evidence remains visible in a short reply.
+    Use `list_metric_names` to discover names if a query returns no series.
     """
     try:
         window_seconds = parse_duration_seconds(window)
@@ -243,7 +175,9 @@ def get_metrics(promql: str, window: str) -> str:
             (float(pt[0]) for series in wide_results for pt in series.get("values", [])),
             default=None,
         )
-        age_minutes = (end - last_ts) / 60 if last_ts else None
+        if last_ts is None:
+            return "(no samples in this range; check the metric name with list_metric_names)"
+        age_minutes = (end - last_ts) / 60
         return (
             f"(no data in the last {window} - but this metric WAS recorded as recently as "
             f"~{age_minutes:.0f} min ago, then stopped, rather than never existing. For "
@@ -260,9 +194,15 @@ def get_metrics(promql: str, window: str) -> str:
     for series in results:
         labels = series.get("metric", {})
         label_str = ", ".join(f'{k}="{v}"' for k, v in labels.items()) or "(no labels)"
-        points = series["values"]
-        point_str = ", ".join(f"{ts:.0f}:{val}" for ts, val in points)
-        lines.append(f"{label_str} -> {point_str}")
+        points = series.get("values", [])
+        if not points:
+            lines.append(f"{label_str} -> (no samples)")
+            continue
+        recent = points[-4:]
+        point_str = ", ".join(f"{float(ts):.0f}:{val}" for ts, val in recent)
+        numeric = [float(value) for _, value in points if value not in ("NaN", "nan")]
+        range_text = f"; range={min(numeric):g}..{max(numeric):g}" if numeric else ""
+        lines.append(f"{label_str} -> latest {point_str}{range_text}")
 
     output = "\n".join(lines)
     if truncated:
@@ -272,21 +212,9 @@ def get_metrics(promql: str, window: str) -> str:
 
 @mcp.tool()
 def list_metric_names(job: str | None = None, contains: str | None = None) -> str:
-    """List the metric names that actually exist in Prometheus right now.
+    """List metric names currently known to Prometheus.
 
-    Use this before get_metrics rather than guessing a name - a guessed name
-    that doesn't exist returns the exact same empty result as a real metric
-    with no current data, so guessing alone can never tell those two cases
-    apart.
-
-    Args:
-        job: Optional scrape job to scope to, e.g. "redis", "kafka",
-            "go-server", "go-enricher". Omit to list every metric name
-            across the whole stack.
-        contains: Optional case-insensitive substring filter on the name.
-
-    Returns:
-        One metric name per line, sorted.
+    Optionally filter by scrape `job` and a case-insensitive `contains` value.
     """
     params = {}
     if job:
@@ -311,16 +239,9 @@ def list_metric_names(job: str | None = None, contains: str | None = None) -> st
 
 @mcp.tool()
 def get_container_state() -> str:
-    """Get the live state of every container in the fraud pipeline stack.
+    """List current Compose container service names, states and health status.
 
-    No arguments — always reports on the whole stack, since a hung or
-    crash-looping container in a service you weren't even asking about is
-    often the actual root cause.
-
-    Returns:
-        One line per container: service name, state (running/exited/paused/
-        restarting), a human-readable status string (e.g. "Up 24 minutes
-        (healthy)"), and health check result if the container defines one.
+    The one-shot Redis setup job normally exits after successful setup.
     """
     result = run_compose("ps", "--all", "--format", "json")
 
@@ -416,97 +337,16 @@ def read_container_env_config(service: str) -> str:
 
 @mcp.tool()
 def read_config(service: str) -> str:
-    """Read the live, currently-in-effect configuration for one service.
+    """Read live configuration for a Redis node or Go application service.
 
-    Args:
-        service: Compose service name, e.g. "go-server", "go-enricher",
-            "redis1", "redis2", "redis3".
-
-    Returns:
-        For Redis nodes: server-side config (maxmemory, maxmemory-policy,
-        maxclients, timeout, appendonly) read live via CONFIG GET.
-        For app services: the actual resolved env vars on the running
-        container (not the compose YAML text) for REDIS_/KAFKA_/GRPC_
-        settings — anything that looks like a secret is always excluded.
-
-    HOW TO READ THE APP-SERVICE OUTPUT: most settings normally print as
-    "(unset, using library default)". A setting showing an explicit VALUE
-    while its siblings show "(unset, using library default)" was deliberately
-    overridden by someone - that asymmetry is the signal, and it is often the
-    entire root cause. Compare each line against the others in the SAME
-    service's output before moving on; a single conspicuous number sitting in
-    a column of defaults is a finding, not background. Note that a value which
-    looks harmlessly small can still be the fault: millisecond-scale timeouts
-    below a real network round trip make a perfectly healthy dependency look
-    like it is failing.
+    Redis returns selected CONFIG GET values. Go services return selected
+    Redis, Kafka and gRPC environment variables; secret-like names are hidden.
     """
     if service in _REDIS_SERVICES:
         return read_redis_config(service)
-    return read_container_env_config(service)
-
-
-@mcp.tool()
-def list_recent_changes(window: str) -> str:
-    """List deliberate fault injections/restores made to the stack recently.
-
-    This is ground truth for "did someone change something on purpose" —
-    distinct from get_metrics/get_container_state/query_logs, which only
-    show symptoms and would leave an agent guessing whether a signal is a
-    real incident or a known, deliberate fault-injection test.
-
-    Args:
-        window: How far back to look, e.g. "30m", "2h", "1d".
-
-    Returns:
-        One line per change, oldest first: timestamp (UTC), an opaque change
-        ID (stable per underlying change, so repeats are recognizable), and
-        the action (inject/restore). Does not name what the change was -
-        this tells you *that* something was deliberately changed, not what
-        to conclude from it.
-
-    IMPORTANT: this stack is reused across back-to-back tests without a long
-    cooldown between them. Metrics and logs both retain real history, so a
-    query_logs/get_metrics window can surface a previous, already-resolved
-    incident that has nothing to do with what's happening right now - and it
-    may look like a bigger, more obvious signal than the current one. Anchor
-    your investigation to the timestamp of the LATEST entry returned here:
-    evidence timestamped meaningfully before that entry belongs to an earlier
-    incident, not this one. Don't let an old, easy-to-find answer substitute
-    for the real, current one.
-    """
-    try:
-        window_seconds = parse_duration_seconds(window)
-    except ValueError as e:
-        return f"ERROR: {e}"
-
-    if not CHANGELOG_FILE.exists():
-        return "(no changes recorded yet)"
-
-    cutoff = time.time() - window_seconds
-    lines = []
-    with CHANGELOG_FILE.open(encoding="utf-8") as f:
-        for raw_line in f:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            try:
-                entry = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-            try:
-                ts = datetime.strptime(entry["timestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-            except (KeyError, ValueError):
-                continue
-            if ts.timestamp() < cutoff:
-                continue
-            change_id = hashlib.sha256(
-                f"{entry.get('family', '?')}/{entry.get('fault', '?')}".encode()
-            ).hexdigest()[:8]
-            lines.append(f"{entry['timestamp']} | change=CHG-{change_id} | {entry.get('action', '?')}")
-
-    if not lines:
-        return f"(no changes recorded in the last {window})"
-    return "\n".join(lines)
+    if service in {"go-server", "go-enricher"}:
+        return read_container_env_config(service)
+    return "ERROR: read_config supports only redis1/redis2/redis3/go-server/go-enricher"
 
 
 if __name__ == "__main__":

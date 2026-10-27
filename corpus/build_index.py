@@ -12,6 +12,8 @@ retrieval trivially circular.
 Usage: python build_index.py
 """
 
+import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -40,10 +42,19 @@ def embedding_text(record: dict) -> str:
 
 
 def main():
-    records = load_traces()
-    print(f"Loaded {len(records)} traces from {TRACES_FILE.name}")
+    parser = argparse.ArgumentParser(description="Build a held-out incident retrieval index")
+    parser.add_argument("--output-dir", type=Path, default=CHROMA_DIR)
+    parser.add_argument("--exclude-fault-id", type=int, action="append", default=[])
+    args = parser.parse_args()
 
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    excluded = set(args.exclude_fault_id)
+    records = [record for record in load_traces() if int(record["fault_id"]) not in excluded]
+    if not records:
+        parser.error("no corpus records remain after fault exclusions")
+    print(f"Indexing {len(records)} traces; held-out fault IDs: {sorted(excluded)}")
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(args.output_dir))
     # Fresh build every run - drop and recreate rather than upsert, so the
     # index always exactly matches the current traces.jsonl on disk.
     try:
@@ -66,7 +77,17 @@ def main():
     ]
 
     collection.add(ids=ids, documents=documents, metadatas=metadatas)
-    print(f"Indexed {collection.count()} records into '{COLLECTION_NAME}' at {CHROMA_DIR}")
+    manifest = {
+        "schema_version": "2.0",
+        "excluded_fault_ids": sorted(excluded),
+        "included_fault_ids": sorted(int(record["fault_id"]) for record in records),
+        "corpus_sha256": hashlib.sha256(TRACES_FILE.read_bytes()).hexdigest(),
+        "indexed_count": collection.count(),
+    }
+    (args.output_dir / "index_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"Indexed {collection.count()} records into '{COLLECTION_NAME}' at {args.output_dir}")
 
 
 if __name__ == "__main__":

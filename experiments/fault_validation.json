@@ -1,0 +1,152 @@
+{
+  "cases": [
+    {
+      "case": "redis_node_stopped",
+      "finished_at_utc": "2026-10-11T02:40:16.795657+00:00",
+      "live_probe": {
+        "at_utc": "2026-10-11T02:40:01.311936+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": false
+        }
+      },
+      "recovery_probe": {
+        "at_utc": "2026-10-11T02:40:16.795596+00:00",
+        "recovered": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": true
+        }
+      },
+      "started_at_utc": "2026-10-11T02:39:56.043430+00:00",
+      "status": "passed",
+      "sustained_probe": {
+        "at_utc": "2026-10-11T02:40:07.104422+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": false
+        }
+      }
+    },
+    {
+      "case": "ingestion_paused",
+      "finished_at_utc": "2026-10-11T02:40:29.637558+00:00",
+      "live_probe": {
+        "at_utc": "2026-10-11T02:40:20.497675+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": true,
+          "running": false
+        }
+      },
+      "recovery_probe": {
+        "at_utc": "2026-10-11T02:40:29.637511+00:00",
+        "recovered": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": true
+        }
+      },
+      "started_at_utc": "2026-10-11T02:40:16.796969+00:00",
+      "status": "passed",
+      "sustained_probe": {
+        "at_utc": "2026-10-11T02:40:26.547046+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": true,
+          "running": false
+        }
+      }
+    },
+    {
+      "case": "broker_stopped",
+      "finished_at_utc": "2026-10-11T02:41:34.751402+00:00",
+      "live_probe": {
+        "at_utc": "2026-10-11T02:40:35.068802+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": false,
+          "paused": false,
+          "running": false
+        }
+      },
+      "recovery_probe": {
+        "at_utc": "2026-10-11T02:41:34.751358+00:00",
+        "recovered": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": true
+        }
+      },
+      "started_at_utc": "2026-10-11T02:40:29.639557+00:00",
+      "status": "passed",
+      "sustained_probe": {
+        "at_utc": "2026-10-11T02:40:40.882232+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": false,
+          "paused": false,
+          "running": false
+        }
+      }
+    },
+    {
+      "case": "enricher_paused",
+      "finished_at_utc": "2026-10-11T02:41:46.323410+00:00",
+      "live_probe": {
+        "at_utc": "2026-10-11T02:41:37.745302+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": true,
+          "running": false
+        }
+      },
+      "recovery_probe": {
+        "at_utc": "2026-10-11T02:41:46.323364+00:00",
+        "recovered": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": false,
+          "running": true
+        }
+      },
+      "started_at_utc": "2026-10-11T02:41:34.752768+00:00",
+      "status": "passed",
+      "sustained_probe": {
+        "at_utc": "2026-10-11T02:41:43.486049+00:00",
+        "live": true,
+        "state": {
+          "count": 1,
+          "healthy": true,
+          "paused": true,
+          "running": false
+        }
+      }
+    }
+  ],
+  "created_at_utc": "2026-10-11T02:41:46.323420+00:00",
+  "purpose": "fault mechanics, no model diagnosis",
+  "schema_version": "2.0",
+  "status": "passed"
+}

@@ -23,7 +23,7 @@ var (
 
 	duplicateMessagesTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "fraud_enricher_duplicate_messages_total",
-		Help: "Total number of duplicate transactions skipped by the enricher",
+		Help: "Total number of duplicate transactions whose Redis window update was skipped; output is republished",
 	})
 
 	enrichmentDuration = promauto.NewHistogram(prometheus.HistogramOpts{

@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -10,9 +10,6 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"google.golang.org/protobuf/proto"
-
-	pb "fraud-enricher/pb"
 )
 
 const (
@@ -21,297 +18,96 @@ const (
 )
 
 func main() {
-
-	// Kafka Consumer setup
-	kafkaAddr := os.Getenv("KAFKA_BROKER")
-	if kafkaAddr == "" {
-		kafkaAddr = "localhost:9092"
+	if err := run(); err != nil {
+		log.Fatalf("enricher stopped: %v", err)
 	}
-	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
-     "bootstrap.servers":    kafkaAddr,
-     "group.id":             "foo",
-     "auto.offset.reset":    "smallest",
-	"enable.auto.commit": "false"})
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	// Subscribe to Raw transactions Kafka topic
-	kafkaConsumerTopics := os.Getenv("KAFKA_CONSUMER_TOPICS_ENRICHER")
-	if kafkaConsumerTopics == "" {
-		kafkaConsumerTopics = fromKafkaTopic
-	}
-	err = consumer.SubscribeTopics([]string {kafkaConsumerTopics}, nil)
-
-	// Kafka Producer Setup
-	kafkaAddr_new := os.Getenv("KAFKA_BROKER")
-	if kafkaAddr_new == "" {
-		kafkaAddr_new = "localhost:9092"
-	}
-	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": kafkaAddr_new})
-	if err != nil {
-		log.Fatalf("Failed to create producer: %v", err)
-	}
-	defer p.Close()
-	
-	// Process message
-	const MIN_COMMIT_COUNT = 20
-	run := true
-	const COMMIT_INTERVAL = 5 * time.Second
-	var successCount int
-	var lastCommitTime = time.Now()
-
-	// Handle Ctrl+C
-	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
-	fmt.Println("Starting Enricher Agent")
-	fmt.Println("Initializing Redis Connections in Client")
-	client, ctx := initialize_redis()
-	time.Sleep(10 * time.Second)
-
-	// METRICS SERVER
-	startMetricsServer()
-
-	// Initializing MaxMindDB
-	cityDb, asnDB, cleanUpDB, err := initialize_maxmindDB()
-	if err != nil {
-		fmt.Println("WARNING: SOME ISSUE WITH THE DB CONNECTIONS... RESOLVE THIS ASAP")
-	}
-
-	defer cleanUpDB()
-
-	for run == true {
-		select {
-
-			case sig := <-sigchan:
-			fmt.Printf("Caught signal %v: terminating\n", sig)
-			if successCount > 0 {
-				_, err := consumer.Commit()
-				if err != nil {
-					log.Printf("Final commit failed: %v", err)
-				} else {
-					log.Printf("Final commit successful (%d messages)", successCount)
-				}
-			}
-			run = false
-
-			default:
-				ev := consumer.Poll(100)
-				
-				if ev == nil {
-					if successCount > 0 && time.Since(lastCommitTime) > COMMIT_INTERVAL {
-						_, err := consumer.Commit()
-						if err != nil {
-							log.Printf("time-based commit failed: %v", err)
-						} else {
-							log.Printf("time-based commit: %d messages", successCount)
-							successCount = 0
-							lastCommitTime = time.Now()
-						}
-					}
-					continue
-				}
-
-				switch e := ev.(type) {
-				case *kafka.Message:
-					msgStart := time.Now()
-					var txn pb.TransactionRequest
-					err := proto.Unmarshal(e.Value, &txn)
-					if err != nil {
-						fmt.Println("Failed to Unmarshal")
-						// Push to DLQ (to do later)
-						enricherErrorsTotal.WithLabelValues("unmarshal").Inc()
-						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-						continue;
-					}
-					log.Printf("Transaction values: IP Address=%s, Txn Id=%s, UserId=%d, Amount=%.2f", txn.IpAddress, txn.TransactionId, txn.UserId, txn.Amount)
-					
-					// Check if IP address is valid or not. If not valid push to DLQ and continue
-					var is_valid_ip bool = validateIP(txn.IpAddress)
-					
-					// If valid, Check whether we have that entry in Redis few mins back, else add it
-					if is_valid_ip {
-						var geoData *GeoData
-						// GEOIP ENRICHEMENT
-						data, status, err := getGeoFromRedis(client, ctx, txn.IpAddress)
-						if err != nil {
-							fmt.Println("WARNING: SOMETHING IS WRONG WITH THE GET GEO FUNCTION...")
-							enricherErrorsTotal.WithLabelValues("geo_lookup").Inc()
-							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-							continue
-						} else {
-							if status == "MISS" {
-							// Not present in cache, so check maxmind and update cache
-							cityRecord, asnRecord := maxMindDBLookup(txn.IpAddress, cityDb, asnDB)
-							geoData = &GeoData{
-								City:        cityRecord.City.Names["en"],
-								Country:     cityRecord.Country.Names["en"],
-								CountryCode: cityRecord.Country.IsoCode,
-								Latitude:    cityRecord.Location.Latitude,
-								Longitude:   cityRecord.Location.Longitude,
-								ASN:         fmt.Sprintf("AS%d", asnRecord.AutonomousSystemNumber),
-								ISP:         asnRecord.AutonomousSystemOrganization,
-								IsHosting:   isHostingProvider(asnRecord.AutonomousSystemOrganization),
-							}
-							// Update cache
-							status, err := setGeoToRedis(client, ctx, txn.IpAddress, *geoData)
-							if err != nil {
-								fmt.Println("SOME ISSUE WITH THE REDIS SET.......")
-							} else {
-								if status == "REDIS_SET_SUCCESS" {
-									fmt.Println("REDIS SET SUCCESSFUL...........")
-								}
-							}
-							
-						} else if status == "HIT" {
-							geoData = data
-							fmt.Printf("FOUND IN REDIS CACHE....... sample data: city = %s", geoData.City)
-						}
-						
-						// FRAUD METRICS ENRICHMENT
-						fraudData, isDuplicate, err := updateFraudInRedis(client, ctx, txn.IpAddress, float64(txn.Amount), txn.TransactionId)
-						if err != nil {
-							log.Printf("Fraud update failed for IP %s: %v", txn.IpAddress, err)
-							enricherErrorsTotal.WithLabelValues("fraud_update").Inc()
-							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-							continue
-						}
-
-						if isDuplicate {
-							duplicateMessagesTotal.Inc()
-							successCount++
-							if successCount >= MIN_COMMIT_COUNT {
-								_, err := consumer.Commit()
-								if err != nil {
-									log.Printf("Batch commit failed: %v", err)
-								} else {
-									log.Printf("Batch commit: %d messages", successCount)
-									successCount = 0
-									lastCommitTime = time.Now()
-								}
-							}
-							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-							continue
-						}
-
-						log.Printf("ENRICHED_TXN ip=%s city=%s country=%s isp=%s hosting=%t txn_count_2h=%d total_2h=%.2f velocity=%.2f avg=%.2f max=%.2f",
-							txn.IpAddress, 
-							geoData.City,
-							geoData.Country,
-							geoData.ISP,
-							geoData.IsHosting,
-							fraudData.TxnCount,
-							fraudData.TotalAmount,
-							fraudData.AmountVelocity,
-							fraudData.AvgAmount,
-							fraudData.MaxAmount,
-						)
-
-
-						// Few suspicious patterns
-						if fraudData.AmountVelocity > 50000 {
-							log.Printf("HIGH VELOCITY ALERT: IP %s spending $%.2f/hour!", 
-								txn.IpAddress, fraudData.AmountVelocity)
-						}
-
-						if fraudData.TxnCount > 20 {
-							log.Printf("HIGH FREQUENCY ALERT: IP %s made %d transactions in 2h!", 
-								txn.IpAddress, fraudData.TxnCount)
-						}
-
-						if fraudData.TotalAmount > 100000 {
-							log.Printf("HIGH AMOUNT ALERT: IP %s spent $%.2f in 2h!", 
-								txn.IpAddress, fraudData.TotalAmount)
-						}
-
-						// PUSH TO KAFKA AS PRODUCER
-						enrichedTxn := EnrichedTransaction{
-							TransactionID: txn.TransactionId,
-							UserID: txn.UserId,
-							Amount: float64(txn.Amount),
-							Timestamp: txn.Timestamp,
-							IsFraud: txn.IsFraud,
-							Type: txn.Type,
-							OldBalanceOrig: float64(txn.OldBalanceOrig),
-							NewBalanceOrig: float64(txn.NewBalanceOrig),
-							OldBalanceDest: float64(txn.OldBalanceDest),
-							NewBalanceDest: float64(txn.NewBalanceDest),
-							IsUnauthorizedOverdraft: float64(txn.IsUnauthorizedOverdraft),
-							
-							IPAddress: txn.IpAddress,
-							City: geoData.City,
-							Country: geoData.Country,
-							CountryCode: geoData.CountryCode,
-							Latitude: geoData.Latitude,
-							Longitude: geoData.Longitude,
-							ASN: geoData.ASN,
-							ISP: geoData.ISP,
-							IsHosting: geoData.IsHosting,
-							
-							TxnCount2h: fraudData.TxnCount,
-							TotalAmount2h: fraudData.TotalAmount,
-							AmountVelocity: fraudData.AmountVelocity,
-							AvgAmount2h: fraudData.AvgAmount,
-							MaxAmount2h: fraudData.MaxAmount,
-						}
-
-						enrichedJSON, err := json.Marshal(enrichedTxn)
-						if err != nil {
-							log.Printf("JSON marshal failed: %v", err)
-							enricherErrorsTotal.WithLabelValues("json_marshal").Inc()
-							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-							continue
-						}
-
-						err = p.Produce(&kafka.Message{
-							TopicPartition: kafka.TopicPartition{
-								Topic: &[]string{toKafkaTopic}[0],
-								Partition: kafka.PartitionAny,
-							},
-							Value: enrichedJSON,
-						}, nil)
-
-						if err != nil {
-							log.Printf("Kafka publish by Enricher failed: %v", err)
-							enricherErrorsTotal.WithLabelValues("kafka_produce").Inc()
-							enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-							continue
-						}
-
-						log.Printf("Published Enriched transaction to %s", toKafkaTopic)
-						messagesProcessedTotal.Inc()
-						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-						successCount++
-						if successCount >= MIN_COMMIT_COUNT {
-							_, err := consumer.Commit()
-							if err != nil {
-								log.Printf("Batch commit failed: %v", err)
-							} else {
-								log.Printf("Batch commit: %d messages", successCount)
-								successCount = 0
-								lastCommitTime = time.Now()
-							}
-						}
-
-					}
-
-					} else {
-						// Push to DLQ
-						enricherErrorsTotal.WithLabelValues("invalid_ip").Inc()
-						enrichmentDuration.Observe(time.Since(msgStart).Seconds())
-					}
-
-
-				case kafka.PartitionEOF:
-					fmt.Printf("%% Reached %v\n", e)
-				case kafka.Error:
-					fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
-				default:
-					fmt.Printf("Ignored %v\n", e)
-				}
-		}
-		
-	}
-	consumer.Close()
 }
 
+func run() error {
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+	group := os.Getenv("KAFKA_CONSUMER_GROUP")
+	if group == "" {
+		group = "fraud-enricher"
+	}
+	offsetReset := os.Getenv("KAFKA_OFFSET_RESET")
+	if offsetReset == "" {
+		offsetReset = "earliest"
+	}
+	if offsetReset != "earliest" && offsetReset != "latest" && offsetReset != "error" {
+		return fmt.Errorf("invalid KAFKA_OFFSET_RESET %q", offsetReset)
+	}
+
+	client, err := initializeRedis()
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	cityDB, asnDB, closeDB, err := initialize_maxmindDB()
+	if err != nil {
+		return fmt.Errorf("initialize GeoIP: %w", err)
+	}
+	defer closeDB()
+
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{
+		"bootstrap.servers":   broker,
+		"enable.idempotence":  true,
+		"acks":                "all",
+		"delivery.timeout.ms": 10000,
+	})
+	if err != nil {
+		return fmt.Errorf("create Kafka producer: %w", err)
+	}
+	defer producer.Close()
+
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers":        broker,
+		"group.id":                 group,
+		"auto.offset.reset":        offsetReset,
+		"enable.auto.commit":       false,
+		"enable.auto.offset.store": false,
+	})
+	if err != nil {
+		return fmt.Errorf("create Kafka consumer: %w", err)
+	}
+	defer consumer.Close()
+	if err := consumer.SubscribeTopics([]string{fromKafkaTopic}, nil); err != nil {
+		return fmt.Errorf("subscribe to %s: %w", fromKafkaTopic, err)
+	}
+
+	startMetricsServer()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	processor := transactionProcessor{redis: client, producer: producer, cityDB: cityDB, asnDB: asnDB}
+	log.Printf("enricher ready: topic=%s group=%s", fromKafkaTopic, group)
+
+	for ctx.Err() == nil {
+		event := consumer.Poll(100)
+		if event == nil {
+			continue
+		}
+		switch message := event.(type) {
+		case *kafka.Message:
+			started := time.Now()
+			outcome, err := processor.process(ctx, message)
+			enrichmentDuration.Observe(time.Since(started).Seconds())
+			if err != nil {
+				enricherErrorsTotal.WithLabelValues("processing").Inc()
+				return fmt.Errorf("process offset %v before commit: %w", message.TopicPartition, err)
+			}
+			if _, err := consumer.CommitMessage(message); err != nil {
+				return fmt.Errorf("commit offset %v after %s delivery: %w", message.TopicPartition, outcome, err)
+			}
+			if outcome == "enriched" {
+				messagesProcessedTotal.Inc()
+			}
+		case kafka.Error:
+			log.Printf("Kafka consumer error: %v", message)
+		}
+	}
+	log.Printf("enricher stopped after signal")
+	return nil
+}

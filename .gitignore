@@ -24,3 +24,6 @@ Project_Upgrade.md
 corpus/chroma_db/
 
 agent/traces/
+experiments/runs/
+experiments/state/
+experiments/indexes/

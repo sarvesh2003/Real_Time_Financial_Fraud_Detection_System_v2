@@ -6,75 +6,69 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"fraud/internal/redisconfig"
 )
 
 // Lua script
 var updateFraud = redis.NewScript(`
-	local fraud_key = KEYS[1]
-	local dedup_key = KEYS[2]
+	local times_key = KEYS[1]
+	local amounts_key = KEYS[2]
+	local dedup_key = KEYS[3]
 	local amount = tonumber(ARGV[1])
-	local now = tonumber(ARGV[2])
+	local now_ms = tonumber(ARGV[2])
 	local txn_id = ARGV[3]
-	local ttl = tonumber(ARGV[4])
-
-	-- Idempotency check
-	if redis.call("SISMEMBER", dedup_key, txn_id) == 1 then
-		local existing = redis.call("GET", fraud_key)
-		if existing then
-			return cjson.encode({data = cjson.decode(existing), duplicate = true})
-		else
-			return cjson.encode({data = {}, duplicate = true})
-		end
+	local window_ms = tonumber(ARGV[4])
+	local dedup_ttl_seconds = tonumber(ARGV[5])
+	local duplicate = redis.call("EXISTS", dedup_key) == 1
+	if not duplicate then
+		redis.call("ZADD", times_key, now_ms, txn_id)
+		redis.call("HSET", amounts_key, txn_id, amount)
+		redis.call("SET", dedup_key, "1", "EX", dedup_ttl_seconds)
 	end
 
-	-- Mark Txn id as processed
-	redis.call("SADD", dedup_key, txn_id)
-	redis.call("EXPIRE", dedup_key, ttl)
-
-	local value = redis.call("GET", fraud_key)
-	
-	-- NEW IP, so add to redis
-	if not value then
-		local fraud_str = {
-			first_seen = now,
-			last_seen = now,
-			txn_count = 1,
-			total_amount = amount,
-			amount_velocity = 0,
-			avg_amount = amount,
-			max_amount = amount
-		}
-		redis.call("SET", fraud_key, cjson.encode(fraud_str), 'EX', ttl)
-		return cjson.encode({data = fraud_str, duplicate = false})
+	local cutoff = now_ms - window_ms
+	local expired = redis.call("ZRANGEBYSCORE", times_key, "-inf", "(" .. cutoff)
+	for _, id in ipairs(expired) do
+		redis.call("HDEL", amounts_key, id)
 	end
+	redis.call("ZREMRANGEBYSCORE", times_key, "-inf", "(" .. cutoff)
+	local ttl_seconds = math.ceil(window_ms / 1000) + 60
+	redis.call("EXPIRE", times_key, ttl_seconds)
+	redis.call("EXPIRE", amounts_key, ttl_seconds)
 
-	-- Already present, so update it
-	local fraud_data = cjson.decode(value)
-	fraud_data.last_seen = now
-	fraud_data.txn_count = fraud_data.txn_count + 1
-	fraud_data.total_amount = fraud_data.total_amount + amount
-	
-	local duration_hrs = (now - fraud_data.first_seen) / 3600
-	if duration_hrs > 0 then
-		fraud_data.amount_velocity = fraud_data.total_amount / duration_hrs
+	local entries = redis.call("ZRANGE", times_key, 0, -1, "WITHSCORES")
+	local count = #entries / 2
+	local total = 0
+	local maximum = 0
+	for i = 1, #entries, 2 do
+		local value = tonumber(redis.call("HGET", amounts_key, entries[i])) or 0
+		total = total + value
+		maximum = math.max(maximum, value)
 	end
-
-	fraud_data.avg_amount = fraud_data.total_amount / fraud_data.txn_count
-
-	if amount > fraud_data.max_amount then
-		fraud_data.max_amount = amount
+	local first_seen = 0
+	local last_seen = 0
+	if count > 0 then
+		first_seen = math.floor(tonumber(entries[2]) / 1000)
+		last_seen = math.floor(tonumber(entries[#entries]) / 1000)
 	end
-
-	redis.call("SET", fraud_key, cjson.encode(fraud_data), 'EX', ttl)
-	return cjson.encode({data = fraud_data, duplicate = false})
-
+	return cjson.encode({
+		data = {
+			first_seen = first_seen,
+			last_seen = last_seen,
+			txn_count = count,
+			total_amount = total,
+			amount_velocity = total / (window_ms / 3600000),
+			avg_amount = count > 0 and total / count or 0,
+			max_amount = maximum
+		},
+		duplicate = duplicate
+	})
 `)
-
 
 func getGeoFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*GeoData, string, error) {
 	geoIp := fmt.Sprintf("geo:{%s}", ip)
@@ -114,69 +108,33 @@ func setGeoToRedis(client *redis.ClusterClient, ctx context.Context, ip string, 
 	return "REDIS_SET_SUCCESS", nil
 }
 
-func getFraudFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*FraudSignals, string, error) {
-	fraudKey := "fraud:" + ip
-	value, err := client.Get(ctx, fraudKey).Result()
-	
-	if err == redis.Nil {
-		return nil, "MISS", nil
-	} else if err != nil {
-		return nil, "REDIS_ISSUE", err
-	}
-	
-	fraud := &FraudSignals{}
-	err = json.Unmarshal([]byte(value), fraud)
-	if err != nil {
-		return nil, "UNMARSHAL_ISSUE", err
-	}
-	
-	return fraud, "HIT", nil
-}
-
 func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip string, amount float64, transactionid string) (*FraudSignals, bool, error) {
-	fraudKey := fmt.Sprintf("fraud:{%s}", ip)
-	dedupKey := fmt.Sprintf("dedup:{%s}", ip)
+	timesKey := fmt.Sprintf("fraud:{%s}:times", ip)
+	amountsKey := fmt.Sprintf("fraud:{%s}:amounts", ip)
+	dedupKey := fmt.Sprintf("dedup:{%s}:%s", ip, transactionid)
 
-	now := time.Now().Unix()
-	ttl := 7200
-
-	data, err := updateFraud.Run(ctx, client, []string{fraudKey, dedupKey}, amount, now, transactionid, ttl).Result()
+	data, err := updateFraud.Run(ctx, client, []string{timesKey, amountsKey, dedupKey},
+		amount, time.Now().UnixMilli(), transactionid, 2*time.Hour.Milliseconds(), int((7 * 24 * time.Hour).Seconds())).Result()
 	if err != nil {
-		return nil, false, fmt.Errorf("Lua script failed with %w", err)
+		return nil, false, fmt.Errorf("rolling fraud window update: %w", err)
 	}
 
 	var response struct {
 		Data      FraudSignals `json:"data"`
-		Duplicate bool `json:"duplicate"`
+		Duplicate bool         `json:"duplicate"`
 	}
 
-	// var fraudData struct {
-	// 	FirstSeen int64 `json:"first_seen"`
-	// 	LastSeen int64 `json:"last_seen"`
-	// 	TxnCount int `json:"txn_count"`
-	// 	TotalAmount float64 `json:"total_amount"`
-	// 	AmountVelocity float64 `json:"amount_velocity"`
-	// 	AvgAmount float64 `json:"avg_amount"`
-	// 	MaxAmount float64 `json:"max_amount"`
-	// }
-
-	err = json.Unmarshal([]byte(data.(string)), &response)
+	encoded, ok := data.(string)
+	if !ok {
+		return nil, false, fmt.Errorf("rolling fraud window returned %T", data)
+	}
+	err = json.Unmarshal([]byte(encoded), &response)
 	if err != nil {
-		return nil, false, fmt.Errorf("Some issue with Unmarshalling the JSON: %w", err)
+		return nil, false, fmt.Errorf("decode rolling fraud window: %w", err)
 	}
-
-	// fraud := &FraudSignals{
-	// 		FirstSeen: time.Unix(fraudData.FirstSeen, 0),
-	// 		LastSeen: time.Unix(fraudData.LastSeen, 0),
-	// 		TxnCount: fraudData.TxnCount,
-	// 		TotalAmount: fraudData.TotalAmount,
-	// 		AmountVelocity: fraudData.AmountVelocity,
-	// 		AvgAmount: fraudData.AvgAmount,
-	// 		MaxAmount: fraudData.MaxAmount,
-	// 	}
 
 	if response.Duplicate {
-		log.Printf("DUPLICATE: txn=%s ip=%s (skipped)", transactionid, ip)
+		log.Printf("DUPLICATE: txn=%s ip=%s (counter unchanged, output replayed)", transactionid, ip)
 	} else if response.Data.TxnCount == 1 {
 		log.Printf("NEW IP in fraud tracking: %s (Amount: $%.2f)", ip, amount)
 	} else {
@@ -187,84 +145,23 @@ func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip str
 	return &response.Data, response.Duplicate, nil
 }
 
-
-// envMillis reads an env var as milliseconds and converts it to a Duration.
-// Returns 0 (unset) if the var is missing or invalid, which tells go-redis
-// to fall back to its own library default for that setting.
-func envMillis(key string) time.Duration {
-	val := os.Getenv(key)
-	if val == "" {
-		return 0
-	}
-	parsed, err := strconv.Atoi(val)
+func initializeRedis() (*redis.ClusterClient, error) {
+	options, err := redisconfig.FromEnv()
 	if err != nil {
-		return 0
+		return nil, err
 	}
-	return time.Duration(parsed) * time.Millisecond
-}
-
-// envInt reads an env var as a plain int. Returns 0 (unset) if missing or
-// invalid, which tells go-redis to fall back to its own library default.
-func envInt(key string) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return 0
-	}
-	parsed, err := strconv.Atoi(val)
-	if err != nil {
-		return 0
-	}
-	return parsed
-}
-
-func initialize_redis() (*redis.ClusterClient, context.Context) {
-	redisAddr := os.Getenv("REDIS_CLUSTER_ADDRS")
-	var addrs []string
-	if redisAddr == "" {
-		addrs = []string{
-			"192.168.240.100:6379",
-			"192.168.240.101:6379",
-			"192.168.240.102:6379",
-		}
-		log.Println("Using default docker IPs...")
-	} else {
-		addrs = strings.Split(redisAddr, ",")
-		log.Println("Using Redis cluster IPs...")
-	}
-	client := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs:           addrs,
-		RouteByLatency:  true,
-		DialTimeout:     envMillis("REDIS_DIAL_TIMEOUT_MS"),
-		ReadTimeout:     envMillis("REDIS_READ_TIMEOUT_MS"),
-		WriteTimeout:    envMillis("REDIS_WRITE_TIMEOUT_MS"),
-		PoolSize:        envInt("REDIS_POOL_SIZE"),
-		MaxRetries:      envInt("REDIS_MAX_RETRIES"),
-		MinRetryBackoff: envMillis("REDIS_MIN_RETRY_BACKOFF_MS"),
-		MaxRetryBackoff: envMillis("REDIS_MAX_RETRY_BACKOFF_MS"),
-	})
-
-	ctx := context.Background()
-	fmt.Println("Attempting to connect to Redis Cluster...")
-
-    // Retry
-	for i := 0; i < 30; i++ {
-		err := client.Set(ctx, "health_check", "ok", 5*time.Second).Err()
-
+	client := redis.NewClusterClient(options)
+	for attempt := 1; attempt <= 30; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = client.Set(ctx, "health_check", "ok", 5*time.Second).Err()
+		cancel()
 		if err == nil {
-			fmt.Println("SUCCESS: Connected to Redis Cluster!")
-			break
+			log.Printf("Redis Cluster ready after %d attempt(s)", attempt)
+			return client, nil
 		}
-
-		fmt.Printf("Waiting for Cluster to stabilize (Attempt %d/30): %v\n", i+1, err)
+		log.Printf("Redis Cluster unavailable (attempt %d/30): %v", attempt, err)
 		time.Sleep(2 * time.Second)
 	}
-
-	val, err := client.Get(ctx, "health_check").Result()
-	if err != nil {
-		fmt.Printf("Warning: Cluster might still be unstable: %v\n", err)
-	} else {
-		fmt.Println("Health check verify value:", val)
-	}
-
-	return client, ctx
+	client.Close()
+	return nil, fmt.Errorf("Redis Cluster unavailable after 30 attempts: %w", err)
 }

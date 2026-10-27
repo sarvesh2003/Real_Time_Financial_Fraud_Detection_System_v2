@@ -6,31 +6,23 @@ RUN apk add --no-cache gcc libc-dev git
 WORKDIR /app
 
 # Copying pb files
-COPY pb/proto/fraud/v1/ ./pb/
+COPY pb/ ./pb/
+COPY internal/ ./internal/
 
 # Copy modules files
-COPY go-enricher/go.mod go-enricher/go.sum ./
+COPY go.mod go.sum ./
 
 # Download modules
 RUN go mod download
 
 # Copy source code
-COPY go-enricher/enricher.go .
-COPY go-enricher/models.go .
-COPY go-enricher/redis_functions.go .
-COPY go-enricher/maxmind_functions.go .
-COPY go-enricher/utils.go .
-COPY go-enricher/metrics.go .
-
-RUN go get google.golang.org/grpc
-RUN go get google.golang.org/protobuf
-RUN go mod tidy
+COPY go-enricher/ ./go-enricher/
 
 # Force CGO enabled and use the 'musl' tag for the static build for Alpine
 ENV CGO_ENABLED=1
 ENV GOOS=linux
 
-RUN go build -tags musl -o enricher .
+RUN go build -tags musl -o enricher ./go-enricher
 
 
 CMD ["./enricher"]

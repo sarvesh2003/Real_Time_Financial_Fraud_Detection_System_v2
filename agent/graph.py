@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
+from tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
 
 AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = AGENT_DIR.parent
@@ -21,15 +21,15 @@ COLLECTION_NAME = "fault_investigations"
 
 TOOL_CALL_BUDGET = 15
 CORROBORATION_THRESHOLD = 2
-EVIDENCE_RESULT_CHAR_CAP = 2000
+EVIDENCE_RESULT_CHAR_CAP = MAX_OBSERVATION_CHARS
 RETRIEVAL_DISTANCE_CUTOFF = 1.0
-RETRIEVAL_ENABLED = os.environ.get("RETRIEVAL_MODE", "on").strip().lower() != "off"
 
 
 class EvidenceEntry(TypedDict):
     tool_name: str
     args: dict
     result: str
+    observed_at: str
 
 
 class RetrievedCase(TypedDict):
@@ -82,12 +82,6 @@ class ConcludeInvestigation(BaseModel):
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-def as_text(result) -> str:
-    if isinstance(result, list) and all(isinstance(b, dict) and b.get("type") == "text" for b in result):
-        return "\n".join(b.get("text", "") for b in result)
-    return str(result)
-
-
 def llm_call_meta(response, t0: float) -> dict:
     usage = getattr(response, "usage_metadata", None) or {}
     return {
@@ -98,7 +92,7 @@ def llm_call_meta(response, t0: float) -> dict:
     }
 
 
-async def ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) -> tuple[SchemaT, dict]:
+async def ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) -> tuple[SchemaT, dict, str]:
     schema_json = json.dumps(schema.model_json_schema(), indent=2)
     instruction = HumanMessage(content=(
         "Respond with ONLY a single valid JSON object matching this schema - "
@@ -128,56 +122,21 @@ async def ask_for_json(llm, schema: type[SchemaT], messages: list[BaseMessage]) 
         data = json.loads(text[start:end + 1])
 
     try:
-        return schema.model_validate(data), llm_meta
+        return schema.model_validate(data), llm_meta, response.content
     except ValidationError as e:
         if isinstance(data, dict) and len(data) == 1:
             inner = next(iter(data.values()))
             if isinstance(inner, dict):
                 try:
-                    return schema.model_validate(inner), llm_meta
+                    return schema.model_validate(inner), llm_meta, response.content
                 except ValidationError:
                     pass
         if isinstance(data, dict) and isinstance(data.get("properties"), dict):
             try:
-                return schema.model_validate(data["properties"]), llm_meta
+                return schema.model_validate(data["properties"]), llm_meta, response.content
             except ValidationError:
                 pass
         raise ValueError(f"Model's JSON didn't match {schema.__name__}'s schema. parsed={data!r}") from e
-
-
-def parse_config_lines(text: str) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    for line in text.splitlines():
-        sep = " = " if " = " in line else ("=" if "=" in line and not line.startswith("(") else None)
-        if sep is None:
-            continue
-        key, _, value = line.partition(sep)
-        parsed[key.strip()] = value.strip()
-    return parsed
-
-
-def peer_config_diff(configs: dict[str, str]) -> str:
-    parsed = {service: parse_config_lines(text) for service, text in configs.items()}
-    groups: dict[str, list[str]] = {}
-    for service in parsed:
-        base = re.sub(r"\d+$", "", service)
-        groups.setdefault(base, []).append(service)
-
-    diff_lines = []
-    for base, members in groups.items():
-        if len(members) < 2:
-            continue
-        members = sorted(members)
-        keys = set()
-        for m in members:
-            keys |= parsed[m].keys()
-        for key in sorted(keys):
-            values = {m: parsed[m].get(key, "(absent)") for m in members}
-            if len(set(values.values())) > 1:
-                detail = ", ".join(f"{m}={v}" for m, v in values.items())
-                diff_lines.append(f"{key} differs across {', '.join(members)}: {detail}")
-
-    return "\n".join(diff_lines)
 
 
 def retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
@@ -193,7 +152,7 @@ def retrieve_context(collection, query_text: str) -> list[RetrievedCase]:
     return retrieved
 
 
-def build_graph(llm, tools: list[BaseTool], collection):
+def build_graph(llm, tools: list[BaseTool], collection, retrieval_enabled: bool = False):
     tools_by_name = {t.name: t for t in tools}
 
     async def baseline(state: InvestigationState) -> dict:
@@ -202,54 +161,32 @@ def build_graph(llm, tools: list[BaseTool], collection):
 
         async def run(name: str, args: dict) -> str:
             tool = tools_by_name.get(name)
-            if tool is None:
-                return ""
-            t0 = time.monotonic()
-            try:
-                text = as_text(await tool.ainvoke(args))
-            except Exception as e:
-                text = f"TOOL ERROR: {e}"
-            tool_ms = (time.monotonic() - t0) * 1000
-            evidence.append({"tool_name": name, "args": args, "result": text})
-            events.append(trace_event("tool_call", node="baseline", tool_name=name, args=args, result=text[:2000], tool_ms=tool_ms))
-            return text
+            observation = await observe(tool, args)
+            evidence.append({"tool_name": name, "args": args, "result": observation["result"],
+                             "observed_at": observation["observed_at"]})
+            events.append(trace_event("tool_call", node="baseline", tool_name=name, args=args,
+                                      **observation))
+            return observation["result"]
 
-        container_text = await run("get_container_state", {})
-        await run("list_recent_changes", {"window": "24h"})
+        await run("get_container_state", {})
         await run("get_metrics", {"promql": "up", "window": "1h"})
-
-        seen_services: set[str] = set()
-        configs: dict[str, str] = {}
-        for line in container_text.splitlines():
-            m = re.match(r"([\w.-]+): state=running", line)
-            if not m:
-                continue
-            service = m.group(1)
-            if service in seen_services:
-                continue
-            seen_services.add(service)
-            configs[service] = await run("read_config", {"service": service})
-
-        diff_note = peer_config_diff(configs)
-        if diff_note:
-            evidence.append({"tool_name": "config_diff", "args": {}, "result": diff_note})
-            events.append(trace_event("tool_call", node="baseline", tool_name="config_diff", args={}, result=diff_note[:2000]))
 
         return {
             "evidence_log": state["evidence_log"] + evidence,
+            "calls_used": state["calls_used"] + len(events),
             "trace": state["trace"] + events,
         }
 
     def investigate_prompt(state: InvestigationState) -> tuple[str, list[RetrievedCase]]:
         evidence_lines = [
-            f"{i}. [{e['tool_name']}({e['args']})] {e['result'][:EVIDENCE_RESULT_CHAR_CAP]}"
+            f"{i}. [{e['observed_at']} {e['tool_name']}({e['args']})] {e['result']}"
             for i, e in enumerate(state["evidence_log"])
         ]
         evidence_text = "\n".join(evidence_lines) or "(none gathered yet)"
 
         recent_result_text = " ".join(e["result"][:300] for e in state["evidence_log"][-3:])
         query_text = f"{state['trigger']} {recent_result_text}".strip()
-        if RETRIEVAL_ENABLED:
+        if collection is not None and retrieval_enabled:
             retrieved_all = retrieve_context(collection, query_text)
             retrieved = [c for c in retrieved_all if c["distance"] <= RETRIEVAL_DISTANCE_CUTOFF]
             retrieved_text = "\n".join(
@@ -262,22 +199,19 @@ def build_graph(llm, tools: list[BaseTool], collection):
         remaining = TOOL_CALL_BUDGET - state["calls_used"]
 
         prompt = (
-            f"Incident trigger: {state['trigger']}\n\n"
-            f"Evidence gathered so far (entries 0+ are a baseline sweep already run for you - "
-            f"container state, live config for every running service, recent changes, and "
-            f"overall scrape health - read it fully before deciding your next move):\n"
+            f"Operational assessment request: {state['trigger']}\n\n"
+            f"Evidence gathered so far (entries 0+ are a counted baseline check "
+            f"of container state and scrape health - read it before deciding your next move):\n"
             f"{evidence_text}\n\n"
             f"Similar past fault families (background orientation only, no details given - never "
             f"treat as proof or copy a name/number from a past case into this investigation):\n"
             f"{retrieved_text}\n\n"
             f"Tool calls remaining: {remaining} of {TOOL_CALL_BUDGET}.\n\n"
-            "You have read-only tools: query_logs, get_metrics, list_metric_names, "
-            "get_container_state, read_config, list_recent_changes. Investigate freely - call "
-            "whatever tool would tell you something new about what's actually wrong. You are not "
-            "limited to a fixed list of guesses; form your own theory as you go, and change it if "
-            "the evidence points somewhere else.\n"
-            "Call ConcludeInvestigation once you have enough evidence to explain the symptoms with "
-            "confidence, or once the tools available can no longer tell you anything more."
+            f"You have read-only tools: {', '.join(sorted(tools_by_name))}. Investigate freely - call "
+            "whatever tool would tell you something new about the current state. Test a suspected "
+            "fault against alternatives; a healthy state is possible.\n"
+            "Call ConcludeInvestigation when the evidence supports a report or the available tools "
+            "cannot resolve the uncertainty."
         )
         return prompt, retrieved
 
@@ -303,12 +237,15 @@ def build_graph(llm, tools: list[BaseTool], collection):
         # this is a no-op on every run recorded before this change.
         truncated_retry = False
         empty_retry = False
+        initial_model_response = None
         if not response.tool_calls:
             if response.response_metadata.get("finish_reason") == "length":
                 truncated_retry = True
             elif not str(response.content or "").strip():
                 empty_retry = True
         if truncated_retry or empty_retry:
+            initial_model_response = {"content": response.content, "tool_calls": response.tool_calls,
+                                      "finish_reason": response.response_metadata.get("finish_reason")}
             wasted_meta = llm_meta
             t0 = time.monotonic()
             response = await router_llm.ainvoke([
@@ -336,6 +273,10 @@ def build_graph(llm, tools: list[BaseTool], collection):
             "action_selected", node="investigate", action=action,
             calls_used=state["calls_used"], truncated_retry=truncated_retry,
             empty_retry=empty_retry,
+            agent_visible_prompt=prompt,
+            model_response={"content": response.content, "tool_calls": response.tool_calls,
+                            "finish_reason": response.response_metadata.get("finish_reason")},
+            initial_model_response=initial_model_response,
             retrieved=[{"fault_family": c["fault_family"], "fault_name": c["fault_name"], "distance": c["distance"]} for c in retrieved],
             **llm_meta,
         )
@@ -349,6 +290,9 @@ def build_graph(llm, tools: list[BaseTool], collection):
             return "tool_call"
         return "conclude"
 
+    def route_after_tool(state: InvestigationState) -> Literal["investigate", "conclude"]:
+        return "conclude" if state["calls_used"] >= TOOL_CALL_BUDGET else "investigate"
+
     async def tool_call(state: InvestigationState) -> dict:
         action = state["pending_action"]
 
@@ -358,25 +302,22 @@ def build_graph(llm, tools: list[BaseTool], collection):
             None,
         )
         tool_ms = 0.0
+        observed_at = datetime.now(timezone.utc).isoformat()
         if dup_idx is not None:
             text = f"DUPLICATE: identical call already made - see evidence #{dup_idx} for its result, nothing new here"
         else:
             tool = tools_by_name.get(action["name"])
-            if tool is None:
-                text = f"TOOL ERROR: no such tool '{action['name']}'"
-            else:
-                t0 = time.monotonic()
-                try:
-                    text = as_text(await tool.ainvoke(action["args"]))
-                except Exception as e:
-                    text = f"TOOL ERROR: {e}"
-                tool_ms = (time.monotonic() - t0) * 1000
+            observation = await observe(tool, action["args"])
+            text = observation["result"]
+            tool_ms = observation["tool_ms"]
+            observed_at = observation["observed_at"]
 
-        entry: EvidenceEntry = {"tool_name": action["name"], "args": action["args"], "result": text}
+        entry: EvidenceEntry = {"tool_name": action["name"], "args": action["args"],
+                                "result": text, "observed_at": observed_at}
         calls_used = state["calls_used"] + 1
         event = trace_event(
             "tool_call", node="tool_call", tool_name=action["name"], args=action["args"],
-            result=text[:2000], calls_used=calls_used, tool_ms=tool_ms,
+            result=text, observed_at=observed_at, calls_used=calls_used, tool_ms=tool_ms,
         )
         return {
             "evidence_log": state["evidence_log"] + [entry],
@@ -387,7 +328,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
 
     async def conclude(state: InvestigationState) -> dict:
         evidence_text = "\n".join(
-            f"{i}. [{e['tool_name']}({e['args']})] {e['result'][:EVIDENCE_RESULT_CHAR_CAP]}"
+            f"{i}. [{e['observed_at']} {e['tool_name']}({e['args']})] {e['result']}"
             for i, e in enumerate(state["evidence_log"])
         ) or "(no tool evidence gathered)"
         budget_note = (
@@ -395,10 +336,7 @@ def build_graph(llm, tools: list[BaseTool], collection):
             else f"{TOOL_CALL_BUDGET - state['calls_used']} tool calls remained unused."
         )
 
-        try:
-            result, llm_meta = await ask_for_json(llm, ConcludeOut, [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=(
+        final_prompt = (
                     f"Investigation is ending. {budget_note}\n\n"
                     f"Evidence log (the ONLY things you may cite as proof):\n{evidence_text}\n\n"
                     "Write the final incident report.\n"
@@ -411,7 +349,11 @@ def build_graph(llm, tools: list[BaseTool], collection):
                     "Only mark confidence='confirmed' if the evidence you cite spans at least 2 "
                     "distinct tools (e.g. get_metrics AND read_config, not two query_logs calls) - "
                     "cite every piece of evidence that genuinely backs your conclusion, not just one."
-                )),
+        )
+        try:
+            result, llm_meta, raw_response = await ask_for_json(llm, ConcludeOut, [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=final_prompt),
             ])
         except Exception as e:
             conclusion = {
@@ -428,22 +370,25 @@ def build_graph(llm, tools: list[BaseTool], collection):
             }
             event = trace_event(
                 "conclusion", node="conclude", conclusion=conclusion, parse_failure=True,
+                agent_visible_prompt=final_prompt,
+                response_schema=ConcludeOut.model_json_schema(),
                 llm_ms=0.0, input_tokens=None, output_tokens=None, finish_reason=None,
             )
             return {"conclusion": conclusion, "trace": state["trace"] + [event]}
 
-        valid_indices = [i for i in result.cited_evidence_indices if 0 <= i < len(state["evidence_log"])]
-        distinct_supporting_tools = sorted({state["evidence_log"][i]["tool_name"] for i in valid_indices})
+        valid_indices = sorted({i for i in result.cited_evidence_indices if 0 <= i < len(state["evidence_log"])})
+        supporting_indices = [i for i in valid_indices if usable_evidence(state["evidence_log"][i])]
+        distinct_supporting_tools = sorted({state["evidence_log"][i]["tool_name"] for i in supporting_indices})
+        baseline_count = sum(e.get("node") == "baseline" and e.get("event") == "tool_call" for e in state["trace"])
+        has_agent_observation = any(i >= baseline_count for i in supporting_indices)
 
-        corroboration_shortfall = result.confidence == "confirmed" and len(distinct_supporting_tools) < CORROBORATION_THRESHOLD
-        budget_exhausted = result.confidence == "confirmed" and state["calls_used"] >= TOOL_CALL_BUDGET
+        corroboration_shortfall = result.confidence == "confirmed" and (
+            len(distinct_supporting_tools) < CORROBORATION_THRESHOLD or not has_agent_observation
+        )
 
         enforced_confidence = result.confidence
         downgrade_reason = None
-        if budget_exhausted:
-            enforced_confidence = "best_guess"
-            downgrade_reason = "budget_exhausted"
-        elif corroboration_shortfall:
+        if corroboration_shortfall:
             enforced_confidence = "best_guess"
             downgrade_reason = "corroboration"
 
@@ -459,7 +404,10 @@ def build_graph(llm, tools: list[BaseTool], collection):
             "budget": TOOL_CALL_BUDGET,
             "downgrade_reason": downgrade_reason,
         }
-        event = trace_event("conclusion", node="conclude", conclusion=conclusion, **llm_meta)
+        event = trace_event("conclusion", node="conclude", conclusion=conclusion,
+                            agent_visible_prompt=final_prompt,
+                            response_schema=ConcludeOut.model_json_schema(),
+                            model_response=raw_response, **llm_meta)
         return {"conclusion": conclusion, "trace": state["trace"] + [event]}
 
     graph = StateGraph(InvestigationState)
@@ -474,7 +422,9 @@ def build_graph(llm, tools: list[BaseTool], collection):
         "tool_call": "tool_call",
         "conclude": "conclude",
     })
-    graph.add_edge("tool_call", "investigate")
+    graph.add_conditional_edges("tool_call", route_after_tool, {
+        "investigate": "investigate", "conclude": "conclude",
+    })
     graph.add_edge("conclude", END)
 
     return graph.compile()

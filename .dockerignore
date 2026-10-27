@@ -1,9 +1,14 @@
 # Ignore everything by default
 **
 
+# Shared Go module
+!go.mod
+!go.sum
+!internal/redisconfig/*.go
+
 # Allow Python producer files
 !python-producer/requirements.txt
-!python-producer/producer.py
+!python-producer/traffic.py
 !python-producer/transaction-generator-models/model_gaussian_20L.pkl
 !python-producer/transaction-generator-models/userIds_10k.csv
 

@@ -1,6 +1,5 @@
-grpcio
-grpcio-tools
-pandas
-protobuf
-mesa
-sdv
+grpcio==1.84.0
+pandas==2.3.3
+protobuf==7.36.2
+sdv==1.31.0
+Faker==40.43.0
