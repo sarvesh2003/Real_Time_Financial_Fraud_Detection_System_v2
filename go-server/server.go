@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"fraud/internal/validation"
 	pb "fraud/pb/proto/fraud/v1"
 )
 
@@ -46,10 +46,9 @@ func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest
 	// The closure measures at return; a plain deferred call would evaluate
 	// time.Since(start) on entry.
 	defer func() { transactionDuration.Observe(time.Since(start).Seconds()) }()
-	if req.GetTransactionId() == "" || req.GetUserId() == "" || net.ParseIP(req.GetIpAddress()) == nil ||
-		math.IsNaN(req.GetAmount()) || math.IsInf(req.GetAmount(), 0) || req.GetAmount() < 0 {
+	if err := validation.Transaction(req); err != nil {
 		transactionErrorsTotal.WithLabelValues("invalid_request").Inc()
-		return nil, status.Error(codes.InvalidArgument, "invalid transaction_id, user_id, ip_address, or amount")
+		return nil, status.Error(codes.InvalidArgument, "invalid transaction: "+err.Error())
 	}
 
 	allowed, err := s.limiter.Allow(ctx, req.GetUserId())
