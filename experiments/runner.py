@@ -496,6 +496,8 @@ def main() -> int:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--init-stack", action="store_true")
+    parser.add_argument("--wait-ready", type=int, metavar="SECONDS",
+                        help="wait until each required service is up and Prometheus scrapes them all")
     parser.add_argument("--case", choices=CASES)
     parser.add_argument("--retrieval", choices=("off", "on"), default="off")
     parser.add_argument("--runs-dir", type=Path, default=RUNS,
@@ -505,6 +507,20 @@ def main() -> int:
         for case in CASES.values():
             print(f"{case.name}: {case.script or 'no injection'}")
         return 0
+    if args.wait_ready is not None:
+        deadline, last_error = time.monotonic() + args.wait_ready, ""
+        while time.monotonic() < deadline:
+            states = {name: container_state(name) for name in REQUIRED_SERVICES}
+            try:
+                if all(one_healthy(state) for state in states.values()):
+                    print(f"ready: {stack.project()} {prometheus_health()}")
+                    return 0
+                last_error = f"services: {states}"
+            except Exception as error:
+                last_error = str(error)
+            time.sleep(5)
+        print(f"not ready after {args.wait_ready}s: {last_error}", file=sys.stderr)
+        return 1
     if args.init_stack:
         print(f"initialized clean stack: {initialize_stack()}")
         return 0
