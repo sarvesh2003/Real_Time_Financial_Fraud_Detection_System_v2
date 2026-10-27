@@ -4,7 +4,7 @@
 # Shared Go module
 !go.mod
 !go.sum
-!internal/redisconfig/*.go
+!internal/*/*.go
 
 # Allow Python producer files
 !python-producer/requirements.txt

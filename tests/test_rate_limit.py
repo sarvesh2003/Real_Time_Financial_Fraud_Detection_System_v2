@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "go-server" / "server.go"
+SOURCE = ROOT / "go-server" / "redis.go"
 
 
 def docker(*args):

@@ -5,21 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/oschwald/geoip2-golang"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
+	"fraud/internal/validation"
 	pb "fraud/pb/proto/fraud/v1"
 )
 
+const (
+	outcomeEnriched   = "enriched"
+	outcomeDeadLetter = "dead_letter"
+)
+
 type transactionProcessor struct {
-	redis    *redis.ClusterClient
-	producer *kafka.Producer
-	cityDB   *geoip2.Reader
-	asnDB    *geoip2.Reader
+	redis       *redis.ClusterClient
+	geo         *geoIP
+	geoCacheTTL time.Duration
+	// publish returns after the broker acknowledges the record (publishSync).
+	publish func(*kafka.Message) error
 }
 
 // process returns only after the output broker acknowledges delivery. The
@@ -30,40 +36,16 @@ func (p *transactionProcessor) process(ctx context.Context, source *kafka.Messag
 	if err := proto.Unmarshal(source.Value, &txn); err != nil {
 		return p.deadLetter(source, "invalid_protobuf")
 	}
-	if txn.TransactionId == "" || txn.UserId == "" || !validateIP(txn.IpAddress) ||
-		math.IsNaN(txn.Amount) || math.IsInf(txn.Amount, 0) || txn.Amount < 0 {
+	if err := validation.Transaction(&txn); err != nil {
 		return p.deadLetter(source, "invalid_transaction")
 	}
 
-	geo, status, err := getGeoFromRedis(p.redis, ctx, txn.IpAddress)
+	geo, err := p.geoFor(ctx, txn.IpAddress)
 	if err != nil {
-		enricherErrorsTotal.WithLabelValues("geo_cache_read").Inc()
-		return "", fmt.Errorf("read GeoIP cache: %w", err)
-	}
-	if status == "MISS" {
-		city, asn, err := maxMindDBLookup(txn.IpAddress, p.cityDB, p.asnDB)
-		if err != nil {
-			enricherErrorsTotal.WithLabelValues("geo_database").Inc()
-			return "", fmt.Errorf("GeoIP lookup: %w", err)
-		}
-		geo = &GeoData{
-			City: city.City.Names["en"], Country: city.Country.Names["en"],
-			CountryCode: city.Country.IsoCode,
-			Latitude:    city.Location.Latitude, Longitude: city.Location.Longitude,
-			ASN:       fmt.Sprintf("AS%d", asn.AutonomousSystemNumber),
-			ISP:       asn.AutonomousSystemOrganization,
-			IsHosting: isHostingProvider(asn.AutonomousSystemOrganization),
-		}
-		if _, err := setGeoToRedis(p.redis, ctx, txn.IpAddress, *geo); err != nil {
-			enricherErrorsTotal.WithLabelValues("geo_cache_write").Inc()
-			return "", fmt.Errorf("write GeoIP cache: %w", err)
-		}
-	}
-	if geo == nil {
-		return "", fmt.Errorf("GeoIP cache returned no value for %s", txn.IpAddress)
+		return "", err
 	}
 
-	signals, duplicate, err := updateFraudInRedis(p.redis, ctx, txn.IpAddress, txn.Amount, txn.TransactionId)
+	signals, duplicate, err := updateFraudInRedis(ctx, p.redis, txn.IpAddress, txn.Amount, txn.TransactionId)
 	if err != nil {
 		enricherErrorsTotal.WithLabelValues("fraud_window").Inc()
 		return "", err
@@ -74,13 +56,12 @@ func (p *transactionProcessor) process(ctx context.Context, source *kafka.Messag
 		logThresholdAlerts(txn.IpAddress, signals)
 	}
 
-	enriched := buildEnriched(&txn, geo, signals)
-	payload, err := json.Marshal(enriched)
+	payload, err := json.Marshal(buildEnriched(&txn, geo, signals))
 	if err != nil {
 		enricherErrorsTotal.WithLabelValues("json_marshal").Inc()
 		return "", fmt.Errorf("encode enriched transaction: %w", err)
 	}
-	if err := publishSync(p.producer, &kafka.Message{
+	if err := p.publish(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: stringPointer(toKafkaTopic), Partition: kafka.PartitionAny},
 		Key:            []byte(txn.TransactionId), Value: payload,
 	}); err != nil {
@@ -88,16 +69,42 @@ func (p *transactionProcessor) process(ctx context.Context, source *kafka.Messag
 		return "", fmt.Errorf("deliver enriched transaction: %w", err)
 	}
 	log.Printf("enriched transaction_id=%s duplicate=%t count_2h=%d", txn.TransactionId, duplicate, signals.TxnCount)
-	return "enriched", nil
+	return outcomeEnriched, nil
+}
+
+// geoFor reads the Redis GeoIP cache and falls back to MaxMind on a miss.
+func (p *transactionProcessor) geoFor(ctx context.Context, ip string) (GeoData, error) {
+	geo, found, err := getGeoFromRedis(ctx, p.redis, ip)
+	if err != nil {
+		enricherErrorsTotal.WithLabelValues("geo_cache_read").Inc()
+		return GeoData{}, fmt.Errorf("read GeoIP cache: %w", err)
+	}
+	if found {
+		return geo, nil
+	}
+	geo, err = p.geo.lookup(ip)
+	if err != nil {
+		enricherErrorsTotal.WithLabelValues("geo_database").Inc()
+		return GeoData{}, fmt.Errorf("GeoIP lookup: %w", err)
+	}
+	if err := setGeoToRedis(ctx, p.redis, ip, geo, p.geoCacheTTL); err != nil {
+		enricherErrorsTotal.WithLabelValues("geo_cache_write").Inc()
+		return GeoData{}, fmt.Errorf("write GeoIP cache: %w", err)
+	}
+	return geo, nil
 }
 
 func (p *transactionProcessor) deadLetter(source *kafka.Message, reason string) (string, error) {
 	enricherErrorsTotal.WithLabelValues(reason).Inc()
-	if err := publishDeadLetter(p.producer, source, reason); err != nil {
+	message, err := deadLetterMessage(source, reason)
+	if err != nil {
+		return "", err
+	}
+	if err := p.publish(message); err != nil {
 		return "", fmt.Errorf("deliver dead-letter record (%s): %w", reason, err)
 	}
 	log.Printf("dead-lettered raw offset=%v reason=%s", source.TopicPartition, reason)
-	return "dead_letter", nil
+	return outcomeDeadLetter, nil
 }
 
 func logThresholdAlerts(ip string, signals *FraudSignals) {
@@ -112,7 +119,7 @@ func logThresholdAlerts(ip string, signals *FraudSignals) {
 	}
 }
 
-func buildEnriched(txn *pb.TransactionRequest, geo *GeoData, signals *FraudSignals) EnrichedTransaction {
+func buildEnriched(txn *pb.TransactionRequest, geo GeoData, signals *FraudSignals) EnrichedTransaction {
 	return EnrichedTransaction{
 		TransactionID: txn.TransactionId, UserID: txn.UserId, Amount: txn.Amount,
 		Timestamp: txn.Timestamp, IsFraud: txn.IsFraud, Type: txn.Type,

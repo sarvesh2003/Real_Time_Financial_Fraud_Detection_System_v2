@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -14,7 +12,8 @@ import (
 	"fraud/internal/redisconfig"
 )
 
-// Lua script
+// Two-hour processing-time window per IP. KEYS share the {ip} hash tag so the
+// script runs atomically on one cluster slot; the dedup key lasts seven days.
 var updateFraud = redis.NewScript(`
 	local times_key = KEYS[1]
 	local amounts_key = KEYS[2]
@@ -70,45 +69,31 @@ var updateFraud = redis.NewScript(`
 	})
 `)
 
-func getGeoFromRedis(client *redis.ClusterClient, ctx context.Context, ip string) (*GeoData, string, error) {
-	geoIp := fmt.Sprintf("geo:{%s}", ip)
-	value, err := client.Get(ctx, geoIp).Result()
+// getGeoFromRedis reports found=false on a cache miss.
+func getGeoFromRedis(ctx context.Context, client *redis.ClusterClient, ip string) (GeoData, bool, error) {
+	value, err := client.Get(ctx, fmt.Sprintf("geo:{%s}", ip)).Result()
 	if err == redis.Nil {
-		// Entry not found
-		return nil, "MISS", nil
-	} else if err != nil {
-		// Some issue
-		return nil, "REDDIS_ISSUE", err
+		return GeoData{}, false, nil
 	}
-	geo := &GeoData{}
-	err = json.Unmarshal([]byte(value), geo)
 	if err != nil {
-		return nil, "UNMARSHALING_ISSUE", err
+		return GeoData{}, false, err
 	}
-
-	return geo, "HIT", nil
+	var geo GeoData
+	if err := json.Unmarshal([]byte(value), &geo); err != nil {
+		return GeoData{}, false, fmt.Errorf("decode cached GeoIP for %s: %w", ip, err)
+	}
+	return geo, true, nil
 }
 
-func setGeoToRedis(client *redis.ClusterClient, ctx context.Context, ip string, geodata GeoData) (string, error) {
-	geoIp := fmt.Sprintf("geo:{%s}", ip)
-	geoJson, err := json.Marshal(geodata)
+func setGeoToRedis(ctx context.Context, client *redis.ClusterClient, ip string, geo GeoData, ttl time.Duration) error {
+	encoded, err := json.Marshal(geo)
 	if err != nil {
-		return "MARSHAL_ISSUE", err
+		return err
 	}
-	ttlHours := 24
-	if ttlEnv := os.Getenv("GEO_TTL_HOURS"); ttlEnv != "" {
-		if parsed, err := strconv.Atoi(ttlEnv); err == nil {
-			ttlHours = parsed
-		}
-	}
-	err = client.Set(ctx, geoIp, geoJson, time.Duration(ttlHours)*time.Hour).Err()
-	if err != nil {
-		return "REDIS_SET_FAILED", err
-	}
-	return "REDIS_SET_SUCCESS", nil
+	return client.Set(ctx, fmt.Sprintf("geo:{%s}", ip), encoded, ttl).Err()
 }
 
-func updateFraudInRedis(client *redis.ClusterClient, ctx context.Context, ip string, amount float64, transactionid string) (*FraudSignals, bool, error) {
+func updateFraudInRedis(ctx context.Context, client *redis.ClusterClient, ip string, amount float64, transactionid string) (*FraudSignals, bool, error) {
 	timesKey := fmt.Sprintf("fraud:{%s}:times", ip)
 	amountsKey := fmt.Sprintf("fraud:{%s}:amounts", ip)
 	dedupKey := fmt.Sprintf("dedup:{%s}:%s", ip, transactionid)
