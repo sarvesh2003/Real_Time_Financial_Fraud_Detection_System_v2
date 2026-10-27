@@ -1,5 +1,14 @@
-langgraph
-langchain-openai
-langchain-mcp-adapters
-chromadb
-python-dotenv
+# Versions tested with Python 3.13 for the agent and its checks.
+langgraph==1.2.11
+langchain-core==1.6.2
+langchain-openai==1.6.2
+langchain-mcp-adapters==0.3.2
+python-dotenv==1.2.3
+requests==2.34.2
+# Retrieval-on runs only.
+chromadb==1.5.9
+# For tests that call the MCP formatter in-process.
+mcp==1.30.0
+# For tests.smoke_pipeline and experiments.pipeline_probe (gRPC client).
+grpcio==1.83.1
+protobuf==7.36.1

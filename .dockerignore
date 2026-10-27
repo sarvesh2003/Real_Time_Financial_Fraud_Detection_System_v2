@@ -1,40 +1,19 @@
-# Ignore everything by default
+# Allow-list of the files the three images copy; everything else stays out of
+# the build context (including .env, venvs, runs and fixtures).
 **
 
-# Shared Go module
 !go.mod
 !go.sum
+!pb/proto/fraud/v1/*.go
 !internal/*/*.go
+!go-server/*.go
+!go-enricher/*.go
 
-# Allow Python producer files
+!proto/fraud/v1/*.py
 !python-producer/requirements.txt
 !python-producer/traffic.py
 !python-producer/transaction-generator-models/model_gaussian_20L.pkl
 !python-producer/transaction-generator-models/userIds_10k.csv
 
-# Allow Go enricher files
-!go-enricher/*.go
-!go-enricher/go.mod
-!go-enricher/go.sum
-
-# Allow Go server files
-!go-server/*.go
-!go-server/go.mod
-!go-server/go.sum
-
-# Allow proto files
-!pb/proto/fraud/v1/*.go
-!proto/fraud/v1/*.py
-
-# Explicitly block these
-.git/
-.gitignore
-.env
-.vscode/
-.idea/
-*.log
-__pycache__/
-*.pyc
-venv/
-env/
-node_modules/
+**/*_test.go
+**/__pycache__/

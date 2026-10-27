@@ -33,7 +33,7 @@ class RollingWindowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "window.lua"
             script.write_text(match.group(1), encoding="utf-8")
-            docker("run", "--rm", "-d", "--name", name, "redis:latest", "redis-server")
+            docker("run", "--rm", "-d", "--name", name, "redis:8.4.0", "redis-server")
             try:
                 for _ in range(30):
                     try:

@@ -1,39 +1,52 @@
-name: Verify local contracts
+name: Verify supported checks
+
+# Deterministic checks only: no model endpoint, GPU or MaxMind credentials.
+# The integration job uses the record-free GeoIP fixture, so it checks the
+# transaction path, not real GeoIP data.
 
 on:
   push:
   pull_request:
 
 jobs:
-  pipeline:
+  go:
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: ci
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Build pipeline images on Linux
-        run: docker compose build go-server go-enricher python-producer
-      - name: Check Go packages in Linux images
-        run: |
-          docker compose run --rm --no-deps --entrypoint go go-server test -tags musl ./go-server ./pb/... ./internal/...
-          docker compose run --rm --no-deps --entrypoint go go-enricher test -tags musl ./go-enricher ./pb/... ./internal/...
-      - name: Load saved synthetic model and create a valid request
-        run: docker compose run --rm --no-deps --entrypoint python python-producer -c "from traffic import TransactionGenerator; r = TransactionGenerator(20261010).make_request(); assert r.transaction_id and r.user_id and r.amount >= 0"
-      - name: Test Redis Lua and V2 scoring contracts
-        run: python -m unittest tests.test_redis_window tests.test_rate_limit tests.test_agent_contract tests.test_v2_scoring tests.test_experiment_stack -v
+      - name: Build Go images (Linux, CGO, musl)
+        run: docker compose build go-server go-enricher
+      - name: Vet and test the checked-out source in the build image
+        run: >
+          docker run --rm --network none -e CGO_ENABLED=1 -v "$PWD:/src:ro" -w /src --entrypoint sh ci-go-enricher
+          -c 'go vet -tags musl ./go-server ./go-enricher ./internal/... &&
+          go test -tags musl -count=1 ./go-server ./go-enricher ./pb/... ./internal/...'
 
-  evaluation:
+  producer:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the traffic producer image
+        run: docker compose build python-producer
+      - name: Generator and send-loop tests inside the image
+        run: >
+          docker run --rm --network none -e PYTHONWARNINGS=ignore -v "$PWD:/src:ro" -w /src
+          --entrypoint python ci-python-producer -m unittest tests.test_traffic -v
+
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install evaluator dependencies
-        run: python -m pip install -r eval/requirements.txt
-      - name: Check evaluator behavior
-        run: python -m unittest discover -s eval/semantic_eval/tests -t . -q
+      - name: Config, scoring, harness lifecycle and production Lua (disposable Redis)
+        run: >
+          python -m unittest tests.test_agent_contract tests.test_v2_scoring tests.test_experiment_stack
+          tests.test_experiment_runner tests.test_redis_window tests.test_rate_limit -v
 
   agent:
     runs-on: ubuntu-latest
@@ -41,11 +54,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install graph dependencies
-        run: python -m pip install langgraph
-      - name: Check investigation control flow
-        run: python -m unittest tests.test_agent_graph -v
+          python-version: '3.13'
+      - run: python -m pip install -r agent/requirements.txt
+      - name: Investigation control flow, artifacts, MCP-to-agent path, fake endpoint
+        run: >
+          python -m unittest tests.test_agent_graph tests.test_agent_run tests.test_observation_path
+          tests.test_fake_model -v
 
   mcp:
     runs-on: ubuntu-latest
@@ -53,8 +67,41 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
+          python-version: '3.13'
+      - run: python -m pip install -r mcp-server/requirements.txt
+      - name: Tool contracts against controlled Docker/Prometheus replies
+        run: python -m unittest tests.test_mcp_tools tests.test_mcp_metrics -v
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      EXPERIMENT_STACK_FILE: experiments/fixture_stack.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install grpcio==1.83.1 protobuf==7.36.1
+      - run: python -m experiments.stack build
+      - run: python -m experiments.stack up
+      - run: python -m experiments.runner --wait-ready 300
+      - name: Reconcile 50 acknowledged requests with raw and enriched records
+        run: python -m experiments.pipeline_probe --count 50
+      - name: Replay, invalid input and poison-message smoke check
+        run: python -m tests.smoke_pipeline
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose -p fraud_fixture_check -f docker-compose.yaml logs --no-color --tail 100
+      - if: always()
+        run: python -m experiments.stack down
+
+  historical-evaluator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
           python-version: '3.12'
-      - name: Install MCP dependencies
-        run: python -m pip install -r mcp-server/requirements.txt
-      - name: Check current metric visibility
-        run: python -m unittest tests.test_mcp_metrics -v
+      - run: python -m pip install -r eval/requirements.txt
+      - name: Frozen evaluator's own tests (historical code, not V2 results)
+        run: python -m unittest discover -s eval/semantic_eval/tests -t . -q

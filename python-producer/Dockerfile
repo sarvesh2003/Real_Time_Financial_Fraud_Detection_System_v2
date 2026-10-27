@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10.22-slim-trixie
 WORKDIR /app
 
 # CPU-only torch first, so SDV's dependency does not pull CUDA wheels.

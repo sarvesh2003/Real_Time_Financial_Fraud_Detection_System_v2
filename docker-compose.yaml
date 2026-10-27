@@ -106,7 +106,7 @@ services:
     restart: on-failure
 
   redis1:
-    image: redis:latest
+    image: redis:8.4.0
     command: >
       redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
@@ -120,7 +120,7 @@ services:
     restart: always
 
   redis2:
-    image: redis:latest
+    image: redis:8.4.0
     command: >
       redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
@@ -134,7 +134,7 @@ services:
     restart: always
 
   redis3:
-    image: redis:latest
+    image: redis:8.4.0
     command: >
       redis-server --cluster-enabled yes --cluster-config-file /data/nodes.conf
       --cluster-node-timeout 5000 --appendonly yes --port 6379
@@ -148,7 +148,7 @@ services:
     restart: always
 
   redis-cluster-setup:
-    image: redis:latest
+    image: redis:8.4.0
     depends_on:
       - redis1
       - redis2
@@ -167,7 +167,7 @@ services:
         ipv4_address: ${REDIS_SETUP_IP:-192.168.241.103}
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.14.0
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -176,7 +176,7 @@ services:
       - redis-cluster-net
 
   redis-exporter:
-    image: oliver006/redis_exporter:latest
+    image: oliver006/redis_exporter:v1.91.1
     command:
       - "--redis.addr=redis://redis1:6379"
       - "--is-cluster"
@@ -189,7 +189,7 @@ services:
       - redis-cluster-net
 
   kafka-exporter:
-    image: danielqsj/kafka-exporter:latest
+    image: danielqsj/kafka-exporter:v1.10.0
     command:
       - "--kafka.server=kafka:29092"
     ports:
@@ -202,7 +202,7 @@ services:
       - redis-cluster-net
 
   geoip-updater:
-    image: maxmindinc/geoipupdate
+    image: maxmindinc/geoipupdate:v7.1.1
     profiles: ["geoip"]
     environment:
       - GEOIPUPDATE_ACCOUNT_ID=${GEOIPUPDATE_ACCOUNT_ID}

@@ -26,8 +26,8 @@ container_id() {
     compose ps -q "$1" | head -n1
 }
 
-# Change log for the MCP server's list_recent_changes tool. One JSON line
-# per inject/restore call, appended by every fault script's case statement.
+# Local audit log (git-ignored; no tool shows it to the agent). One JSON
+# line per inject/restore call, appended by every fault script's case statement.
 CHANGELOG_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/changelog.jsonl"
 
 log_change() {
