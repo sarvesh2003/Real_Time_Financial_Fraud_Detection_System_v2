@@ -43,7 +43,9 @@ type server struct {
 func (s *server) SendTransaction(ctx context.Context, req *pb.TransactionRequest) (*pb.IngestionResponse, error) {
 	start := time.Now()
 	transactionsTotal.Inc()
-	defer transactionDuration.Observe(time.Since(start).Seconds())
+	// The closure measures at return; a plain deferred call would evaluate
+	// time.Since(start) on entry.
+	defer func() { transactionDuration.Observe(time.Since(start).Seconds()) }()
 	if req.GetTransactionId() == "" || req.GetUserId() == "" || net.ParseIP(req.GetIpAddress()) == nil ||
 		math.IsNaN(req.GetAmount()) || math.IsInf(req.GetAmount(), 0) || req.GetAmount() < 0 {
 		transactionErrorsTotal.WithLabelValues("invalid_request").Inc()
