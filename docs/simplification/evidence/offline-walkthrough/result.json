@@ -1,0 +1,65 @@
+{
+  "schema_version": "2.1",
+  "run_id": "inc-a10507d7f4c34b9fad2f7a7d30409e6a",
+  "env_label": "offline-fake",
+  "retrieval_mode": "off",
+  "provider": "openai-compatible",
+  "model_id": "offline-fake",
+  "endpoint_host": "127.0.0.1",
+  "trigger": "Assess the current operational health of the transaction pipeline. Report a supported issue or say if the evidence is insufficient.",
+  "status": "completed",
+  "error_type": "",
+  "traceback_tail": "",
+  "wall_clock_s": 24.470013500002096,
+  "vram_pre": null,
+  "vram_post": null,
+  "model_settings": {
+    "temperature": 0.2,
+    "max_tokens": 8192,
+    "timeout_seconds": 120,
+    "max_retries": 2,
+    "reasoning_effort": null
+  },
+  "tool_schema_sha256": "24203366d0ce0129c0c77eccfa967d1909c5f76788cfd8c8935e819820cf0246",
+  "calls_used": 4,
+  "budget_exhausted": false,
+  "llm_calls": 4,
+  "llm_attempts": 4,
+  "llm_ms_total": 207.41819999238942,
+  "tool_ms_total": 17783.552099994267,
+  "input_tokens_total": 6290,
+  "output_tokens_total": 80,
+  "truncated_retries": 0,
+  "empty_retries": 0,
+  "baseline_evidence_count": 2,
+  "tool_call_sequence": [
+    "query_logs",
+    "get_metrics"
+  ],
+  "distinct_tools_used_total": [
+    "get_container_state",
+    "get_metrics",
+    "query_logs"
+  ],
+  "duplicate_calls": 0,
+  "tool_errors": 0,
+  "hallucinated_tool_calls": 0,
+  "empty_result_calls": 0,
+  "root_cause_id": "none",
+  "summary": "Offline control-flow fixture; no diagnosis was attempted.",
+  "reasoning": "Scripted reply from experiments/fake_model.py, not a model.",
+  "confidence": "inconclusive",
+  "model_self_reported_confidence": "inconclusive",
+  "confidence_was_downgraded": false,
+  "downgrade_reason": null,
+  "cited_evidence_indices": [
+    0,
+    1
+  ],
+  "distinct_supporting_tools": [
+    "get_container_state",
+    "get_metrics"
+  ],
+  "n_cited": 2,
+  "cited_baseline_fraction": 1.0
+}

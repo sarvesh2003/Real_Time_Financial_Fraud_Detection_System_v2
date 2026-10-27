@@ -1,0 +1,236 @@
+{
+  "agent_ended_at_utc": "2026-10-27T05:03:59.885293+00:00",
+  "agent_exit_code": 0,
+  "agent_started_at_utc": "2026-10-27T05:03:23.223999+00:00",
+  "agent_tool_schema_sha256": "24203366d0ce0129c0c77eccfa967d1909c5f76788cfd8c8935e819820cf0246",
+  "case": "redis_node_stopped",
+  "compose_project": "fraud_fixture_check",
+  "container_image_ids": {
+    "go-enricher": [
+      "sha256:546ebfc0fcd1031cb090306fdd67dbd1f31333ace4e4f2094b163c997686c06d"
+    ],
+    "go-server": [
+      "sha256:040c89b487dae53a423c8eaf68e51fb56fe874df35e47eae9bb330cbb0a35469"
+    ],
+    "kafka": [
+      "sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63"
+    ],
+    "prometheus": [
+      "sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
+    ],
+    "redis1": [
+      "sha256:3906b477e4b60250660573105110c28bfce93b01243eab37610a484daebceb04"
+    ],
+    "redis2": [
+      "sha256:3906b477e4b60250660573105110c28bfce93b01243eab37610a484daebceb04"
+    ],
+    "redis3": [
+      "sha256:3906b477e4b60250660573105110c28bfce93b01243eab37610a484daebceb04"
+    ],
+    "zookeeper": [
+      "sha256:90631f224b4397ecfb4e824e43d93e0e42656841c6d55ef635c49df3975260ae"
+    ]
+  },
+  "created_at_utc": "2026-10-27T05:01:49.157848+00:00",
+  "fault_id": 1,
+  "fault_script": "redis/01_node_stopped.sh",
+  "fault_script_sha256": "1b39e54e0158290f0a590bbc7a995b59302dc0019b3c94cf6075c8ad26d62d97",
+  "finished_at_utc": "2026-10-27T05:05:17.781651+00:00",
+  "first_observation_at_utc": "2026-10-27T05:03:47.009625+00:00",
+  "geoip_source": "./tests/fixtures/geoip",
+  "inject_ended_at_utc": "2026-10-27T05:03:22.456676+00:00",
+  "inject_started_at_utc": "2026-10-27T05:03:19.558543+00:00",
+  "last_observation_at_utc": "2026-10-27T05:03:58.535935+00:00",
+  "live_probe_after": {
+    "at_utc": "2026-10-27T05:04:00.847119+00:00",
+    "live": true,
+    "state": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": false
+    }
+  },
+  "live_probe_before": {
+    "at_utc": "2026-10-27T05:03:23.223962+00:00",
+    "live": true,
+    "state": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": false
+    }
+  },
+  "model_id": "offline-fake",
+  "model_settings": {
+    "max_retries": 2,
+    "max_tokens": 8192,
+    "reasoning_effort": null,
+    "temperature": 0.2,
+    "timeout_seconds": 120
+  },
+  "preflight_at_utc": "2026-10-27T05:01:56.309799+00:00",
+  "preflight_states": {
+    "go-enricher": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "go-server": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "kafka": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "prometheus": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "python-producer": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "redis1": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "redis2": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "redis3": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    },
+    "zookeeper": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    }
+  },
+  "processing_probe": {
+    "after": 562,
+    "at_utc": "2026-10-27T05:04:54.162059+00:00",
+    "before": 498,
+    "grew": true,
+    "topic": "enriched_transactions"
+  },
+  "prometheus_up_before": {
+    "go-enricher": 1.0,
+    "go-server": 1.0,
+    "kafka": 1.0,
+    "prometheus": 1.0,
+    "redis": 1.0
+  },
+  "recovery_probe": {
+    "at_utc": "2026-10-27T05:04:05.364810+00:00",
+    "recovered": true,
+    "restore_exit_code": 0,
+    "state": {
+      "count": 1,
+      "healthy": true,
+      "paused": false,
+      "running": true
+    }
+  },
+  "redis_key_counts_after": {
+    "redis1": 405,
+    "redis2": 410,
+    "redis3": 405
+  },
+  "redis_key_counts_before": {
+    "redis1": 327,
+    "redis2": 287,
+    "redis3": 293
+  },
+  "restore_started_at_utc": "2026-10-27T05:04:00.847158+00:00",
+  "retrieval_mode": "off",
+  "run_id": "inc-a10507d7f4c34b9fad2f7a7d30409e6a",
+  "schema_version": "2.1-draft",
+  "source_commit": "7a883947d47f94ca9cf3eb5c8a0e4b500af400ad",
+  "source_dirty": false,
+  "stack_baseline": {
+    "compose_project": "fraud_fixture_check",
+    "container_ids": {
+      "go-enricher": [
+        "552d14cbb69bb82c9f3d09f985dc75e78cd0a565386e5e0d49e714930d95d6e3"
+      ],
+      "go-server": [
+        "35c0b5ead38c2bc6b9738a0d56af12e4943c2d2ac7127b6d0d3175df7cc11a06"
+      ],
+      "kafka": [
+        "0bfc33f1c29d34aff6bf6792dca3c22ceb3130715547c333f6605df59b41fe47"
+      ],
+      "prometheus": [
+        "b0ad8b2033c2401949bda71f7bfc2c76209e0cc1799672c866d304c37f56e417"
+      ],
+      "redis1": [
+        "a947844925ba51ab1687bf6e2d1dab6f62e1526325b77b5b2bce7f90f5a1585c"
+      ],
+      "redis2": [
+        "2680c9cb246562c51d20cd0076129006baedf98c5ea813ee99e7e19f5a60e8b2"
+      ],
+      "redis3": [
+        "79b381944f18a9a22d6badb5f822708f83223727701b3ba3830f93c0f3ef99c0"
+      ],
+      "zookeeper": [
+        "2aca808ae6008b0d70731e7052f2a95ff892490b006a6deb4a2bf73fd5ea9708"
+      ]
+    },
+    "created_at_utc": "2026-10-27T04:59:49.938854+00:00",
+    "redis_key_counts": {
+      "redis1": 0,
+      "redis2": 0,
+      "redis3": 0
+    },
+    "schema_version": 1,
+    "topic_offsets": {
+      "enriched_transactions": 0,
+      "raw_transactions": 0,
+      "raw_transactions_dlq": 0
+    }
+  },
+  "status": "completed",
+  "topic_end_offsets_after": {
+    "enriched_transactions": 622,
+    "raw_transactions": 599,
+    "raw_transactions_dlq": 0
+  },
+  "topic_end_offsets_before": {
+    "enriched_transactions": 416,
+    "raw_transactions": 392,
+    "raw_transactions_dlq": 0
+  },
+  "traffic_probe": {
+    "after": 331,
+    "at_utc": "2026-10-27T05:02:54.147767+00:00",
+    "before": 264,
+    "grew": true,
+    "topic": "raw_transactions"
+  },
+  "traffic_profile": {
+    "TRAFFIC_FRAUD_PROBABILITY": "0.05",
+    "TRAFFIC_INTERVAL_SECONDS": "0.2",
+    "TRAFFIC_SEED": "20261010",
+    "TRAFFIC_USER_LIMIT": "50"
+  },
+  "validity_errors": []
+}

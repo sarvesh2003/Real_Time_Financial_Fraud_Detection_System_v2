@@ -13,6 +13,8 @@ The pipeline does **not** classify fraud: `is_fraud` is synthetic input copied t
 | Agent | Deterministic tests of budget (15 incl. 2 baseline), duplicates, citations, confidence downgrade, failure paths and artifact persistence; end-to-end run against a scripted OpenAI-compatible endpoint | **Any real-model diagnostic accuracy** |
 | Experiments | Lifecycle tests; four registered faults injected, sustained, restored and processing resumed on a fresh isolated stack; human-label scorer | A model pilot and human-reviewed results |
 
+What the 2026-10 cleanup changed and verified is in [docs/SIMPLIFICATION_REPORT.md](docs/SIMPLIFICATION_REPORT.md).
+
 The confidence rule is a structural heuristic: `confirmed` needs usable citations from two tools, one model-requested. It does not check that the evidence supports the cause. Real-model evaluation is deferred; see [later work](#later-work).
 
 ## Supported setup
