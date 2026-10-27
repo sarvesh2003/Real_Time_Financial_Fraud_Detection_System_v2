@@ -1,7 +1,20 @@
-"""Run one continuous fault with a versioned, replayable manifest.
+"""Run one registered fault (or the healthy control) with a replayable manifest.
 
-Only vetted faults are listed. A script that flushes Redis must never be added.
-No model endpoint is contacted by --list or --preflight.
+`--case NAME` performs exactly one scored attempt on a fresh isolated stack:
+
+1. validate the model settings (the same AgentConfig the agent will use);
+2. preflight: one healthy instance of each service, the clean-stack marker,
+   Prometheus targets up, traffic flowing; then consume the marker;
+3. inject the fault and check that it is live;
+4. run the agent (python -m agent.run) without fault metadata, check its
+   artifacts, and check that the fault is still live;
+5. always: restore, wait for the target to recover and for enriched output
+   to resume, and record post-run offsets and Redis key counts.
+
+Every failure is recorded in validity_errors and the run stays on disk as
+"invalid", so attempted runs remain countable. Only vetted faults are listed;
+a script that flushes Redis must never be added. --list, --init-stack and
+--preflight never contact a model endpoint.
 """
 
 from __future__ import annotations
@@ -20,15 +33,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.config import AgentConfig
-from experiments.stack import PROJECT, isolated_env
+from agent.tools import REQUIRED_TOOLS
+from experiments import stack
+from experiments.stack import ROOT, isolated_env
 
-ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "experiments" / "runs" / "v2"
-STACK_MARKER = ROOT / "experiments" / "state" / "stack_baseline.json"
-PROTOCOL_VERSION = "2.0-draft"
+STATE_DIR = ROOT / "experiments" / "state"
+PROTOCOL_VERSION = "2.1-draft"
 REQUIRED_SERVICES = ("zookeeper", "kafka", "redis1", "redis2", "redis3", "go-server", "go-enricher", "prometheus")
 TRAFFIC_SERVICE = "python-producer"
-TOPICS = ("raw_transactions", "enriched_transactions", "raw_transactions_dlq")
+RECOVERY_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -63,8 +77,16 @@ def command(args: list[str], *, timeout: int = 60, env=None) -> subprocess.Compl
 
 
 def compose(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
-    return command(["docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), *args], timeout=timeout)
+    return command(["docker", "compose", "-f", str(stack.COMPOSE_FILE), *args], timeout=timeout)
 
+
+def write_manifest(path: Path, manifest: dict) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+# --- stack observations ---------------------------------------------------
 
 def container_state(service: str) -> dict | None:
     ids = compose("ps", "-a", "-q", service)
@@ -83,11 +105,13 @@ def container_state(service: str) -> dict | None:
             "count": len(states)}
 
 
+def one_healthy(state: dict | None) -> bool:
+    return bool(state and state["running"] and state["healthy"] and state["count"] == 1)
+
+
 def stack_health() -> tuple[bool, dict]:
     states = {name: container_state(name) for name in (*REQUIRED_SERVICES, TRAFFIC_SERVICE)}
-    healthy = all(state and state["running"] and state["healthy"] and state["count"] == 1
-                  for state in states.values())
-    return healthy, states
+    return all(one_healthy(state) for state in states.values()), states
 
 
 def prometheus_health() -> dict[str, float]:
@@ -100,24 +124,43 @@ def prometheus_health() -> dict[str, float]:
     for series in payload["data"]["result"]:
         jobs.setdefault(series["metric"].get("job", ""), []).append(float(series["value"][1]))
     required = {"prometheus", "redis", "kafka", "go-server", "go-enricher"}
-    if not required <= jobs.keys() or any(not jobs[name] or any(value != 1 for value in jobs[name])
-                                       for name in required):
+    if not required <= jobs.keys() or any(value != 1 for name in required for value in jobs[name]):
         raise RuntimeError(f"Prometheus targets not all up: {jobs}")
     return {name: min(values) for name, values in jobs.items()}
 
 
+def topic_end_offsets() -> dict[str, int]:
+    """Total end offset per topic (0 for a topic not yet created)."""
+    try:
+        return {topic: sum(stack.topic_offsets(topic).values()) for topic in stack.TOPICS}
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"cannot inspect Kafka topics: {error.stderr.strip()}") from None
+
+
+def wait_for_growth(topic: str, seconds: int) -> dict:
+    """Poll until a topic gains records; the processing check behind recovery claims."""
+    first = topic_end_offsets()[topic]
+    deadline = time.monotonic() + seconds
+    while True:
+        time.sleep(2)
+        try:
+            last = topic_end_offsets()[topic]
+        except RuntimeError:
+            last = first  # broker still coming back
+        if last > first or time.monotonic() >= deadline:
+            return {"topic": topic, "before": first, "after": last, "grew": last > first,
+                    "at_utc": utc_now()}
+
+
 def traffic_probe() -> dict:
-    first = topic_end_offsets()["raw_transactions"]
-    time.sleep(5)
-    last = topic_end_offsets()["raw_transactions"]
-    if last <= first:
+    result = wait_for_growth("raw_transactions", 5)
+    if not result["grew"]:
         raise RuntimeError("python-producer produced no raw transactions in five seconds")
-    return {"before": first, "after": last, "delta": last - first}
+    return result
 
 
 def container_ids() -> dict[str, list[str]]:
-    return {name: compose("ps", "-a", "-q", name).stdout.splitlines()
-            for name in REQUIRED_SERVICES}
+    return {name: compose("ps", "-a", "-q", name).stdout.splitlines() for name in REQUIRED_SERVICES}
 
 
 def container_images() -> dict[str, list[str]]:
@@ -132,27 +175,6 @@ def container_images() -> dict[str, list[str]]:
     return images
 
 
-def topic_end_offsets() -> dict[str, int]:
-    offsets = {}
-    listed = compose("exec", "-T", "kafka", "kafka-topics", "--bootstrap-server",
-                     "kafka:29092", "--list", timeout=20)
-    if listed.returncode != 0:
-        raise RuntimeError(f"cannot list Kafka topics: {listed.stderr.strip()}")
-    present = set(listed.stdout.splitlines())
-    for topic in TOPICS:
-        if topic not in present:
-            offsets[topic] = 0
-            continue
-        result = compose("exec", "-T", "kafka", "kafka-get-offsets",
-                         "--bootstrap-server", "kafka:29092", "--topic", topic,
-                         "--time", "-1", timeout=20)
-        if result.returncode != 0:
-            raise RuntimeError(f"cannot inspect Kafka topic {topic}: {result.stderr.strip()}")
-        offsets[topic] = sum(int(line.rsplit(":", 1)[-1]) for line in result.stdout.splitlines()
-                             if line.startswith(topic + ":"))
-    return offsets
-
-
 def redis_key_counts() -> dict[str, int]:
     counts = {}
     for service in ("redis1", "redis2", "redis3"):
@@ -163,39 +185,55 @@ def redis_key_counts() -> dict[str, int]:
     return counts
 
 
-def initialize_stack() -> None:
-    """Record container identity only before experimental traffic begins."""
+# --- clean-stack marker ---------------------------------------------------
+
+def marker_path() -> Path:
+    """One marker per Compose project, so a throwaway stack never reuses another's."""
+    return STATE_DIR / f"{stack.project()}.stack_baseline.json"
+
+
+def initialize_stack() -> Path:
+    """Record container identity before any experimental traffic."""
     states = {name: container_state(name) for name in REQUIRED_SERVICES}
-    if not all(state and state["running"] and state["healthy"] and state["count"] == 1
-               for state in states.values()):
-        raise RuntimeError("start one instance of each required service before initialization")
+    if not all(one_healthy(state) for state in states.values()):
+        raise RuntimeError(f"start one instance of each required service before initialization: {states}")
     producer = container_state(TRAFFIC_SERVICE)
     if producer and producer["running"]:
         raise RuntimeError("stop python-producer before initializing the baseline")
     offsets = topic_end_offsets()
     keys = redis_key_counts()
+    # One key per node is allowed: go-enricher's own health_check write.
     if any(offsets.values()) or any(count > 1 for count in keys.values()):
         raise RuntimeError(f"stack contains prior data; Kafka offsets={offsets}, Redis keys={keys}")
-    marker = {"schema_version": 1, "created_at_utc": utc_now(),
-              "container_ids": container_ids(), "topic_offsets": offsets,
-              "redis_key_counts": keys}
-    STACK_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    write_manifest(STACK_MARKER, marker)
+    path = marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_manifest(path, {"schema_version": 1, "compose_project": stack.project(), "created_at_utc": utc_now(),
+                          "container_ids": container_ids(), "topic_offsets": offsets, "redis_key_counts": keys})
+    return path
 
 
 def verify_stack_marker() -> tuple[bool, str]:
-    if not STACK_MARKER.exists():
-        return False, "stack baseline marker absent; initialize a clean stack first"
+    path = marker_path()
+    if not path.exists():
+        return False, f"stack baseline marker {path.name} absent; initialize a clean stack first"
     try:
-        marker = json.loads(STACK_MARKER.read_text(encoding="utf-8"))
-        if marker.get("container_ids") != container_ids():
-            return False, "required containers changed since baseline initialization"
-        if marker.get("used_run_id"):
-            return False, f"stack baseline already used by {marker['used_run_id']}; recreate the isolated stack"
+        marker = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         return False, f"stack baseline marker unreadable: {error}"
+    if marker.get("container_ids") != container_ids():
+        return False, "required containers changed since baseline initialization"
+    if marker.get("used_run_id"):
+        return False, f"stack baseline already used by {marker['used_run_id']}; recreate the isolated stack"
     return True, ""
 
+
+def consume_marker(run_id: str) -> dict:
+    marker = json.loads(marker_path().read_text(encoding="utf-8"))
+    write_manifest(marker_path(), {**marker, "used_run_id": run_id, "used_at_utc": utc_now()})
+    return marker
+
+
+# --- faults ---------------------------------------------------------------
 
 def fault_is_live(case: Case) -> tuple[bool, dict | None]:
     if case.script is None:
@@ -211,6 +249,7 @@ def fault_is_live(case: Case) -> tuple[bool, dict | None]:
 
 
 def fault_is_restored(case: Case) -> tuple[bool, dict | None]:
+    """Target container back (plus cluster/broker API). Processing is checked separately."""
     if case.script is None:
         return True, None
     state = container_state(case.service)
@@ -220,8 +259,7 @@ def fault_is_restored(case: Case) -> tuple[bool, dict | None]:
         probe = compose("exec", "-T", "redis1", "redis-cli", "CLUSTER", "INFO")
         return probe.returncode == 0 and "cluster_state:ok" in probe.stdout, state
     if case.service == "kafka":
-        probe = compose("exec", "-T", "kafka", "kafka-broker-api-versions",
-                        "--bootstrap-server", "kafka:29092")
+        probe = compose("exec", "-T", "kafka", "kafka-broker-api-versions", "--bootstrap-server", "kafka:29092")
         return probe.returncode == 0, state
     return True, state
 
@@ -234,19 +272,32 @@ def bash_binary() -> str:
     return str(git_bash) if os.name == "nt" and git_bash.exists() else "bash"
 
 
-def write_manifest(path: Path, manifest: dict) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def script_action(case: Case, action: str, run_dir: Path) -> subprocess.CompletedProcess:
-    script = ROOT / "fault-injection" / case.script
-    output = command([bash_binary(), str(script), action], timeout=240)
-    (run_dir / f"{action}.stdout.log").write_text(output.stdout, encoding="utf-8")
-    (run_dir / f"{action}.stderr.log").write_text(output.stderr, encoding="utf-8")
+def script_action(case: Case, action: str, log_dir: Path) -> subprocess.CompletedProcess:
+    output = command([bash_binary(), str(ROOT / "fault-injection" / case.script), action], timeout=240)
+    (log_dir / f"{action}.stdout.log").write_text(output.stdout, encoding="utf-8")
+    (log_dir / f"{action}.stderr.log").write_text(output.stderr, encoding="utf-8")
     return output
 
+
+def restore_and_wait(case: Case, log_dir: Path) -> tuple[list[str], dict]:
+    """Run restore and poll the target; returns (errors, probe record)."""
+    errors = []
+    restored = script_action(case, "restore", log_dir)
+    if restored.returncode != 0:
+        errors.append(f"restore script exited {restored.returncode}")
+    recovered, state = False, None
+    for _ in range(RECOVERY_SECONDS):
+        recovered, state = fault_is_restored(case)
+        if recovered:
+            break
+        time.sleep(1)
+    if not recovered:
+        errors.append("target did not recover")
+    return errors, {"at_utc": utc_now(), "restore_exit_code": restored.returncode,
+                    "recovered": recovered, "state": state}
+
+
+# --- agent ----------------------------------------------------------------
 
 def agent_python() -> str:
     configured = os.environ.get("AGENT_PYTHON")
@@ -272,39 +323,91 @@ def verify_retrieval_corpus(case: Case) -> str | None:
     return None
 
 
-def run_case(case: Case, retrieval: str) -> Path:
-    run_id = "inc-" + uuid.uuid4().hex
-    run_dir = RUNS / run_id
-    run_dir.mkdir(parents=True)
-    manifest_path = run_dir / "manifest.json"
+def agent_environment(run_id: str, run_dir: Path, retrieval: str) -> dict[str, str]:
+    env = isolated_env()
+    for name in ("FAULT_ID", "FAULT_NAME", "FAULT_FAMILY"):
+        env.pop(name, None)
+    env.update({"RUN_TAG": run_id, "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
+    return env
+
+
+def check_agent_artifacts(run_dir: Path, run_id: str) -> tuple[dict, list[dict]]:
+    """The agent's result and trace, or RuntimeError naming what is missing."""
+    result_path = run_dir / f"{run_id}.result.json"
+    if not result_path.exists():
+        raise RuntimeError("agent result is absent")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result.get("status") != "completed":
+        raise RuntimeError(f"agent result status is {result.get('status')!r}, not completed")
+    if result.get("root_cause_id") == "PARSE_FAILURE":
+        raise RuntimeError("agent conclusion could not be parsed")
+    trace_path = run_dir / f"{run_id}.trace.jsonl"
+    if not trace_path.exists():
+        raise RuntimeError("agent trace is absent")
+    trace = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    if not trace or trace[0].get("event") != "investigation_started":
+        raise RuntimeError("agent trace header is absent")
+    if any(key in trace[0] for key in ("fault_id", "fault_name", "fault_family")):
+        raise RuntimeError("fault metadata leaked into the agent trace header")
+    tool_names = {spec.get("name") for spec in trace[0].get("tool_specs", [])}
+    if tool_names != REQUIRED_TOOLS:
+        raise RuntimeError(f"agent received an unexpected tool set: {sorted(tool_names)}")
+    if not any(event.get("event") == "action_selected" and event.get("agent_visible_prompt") for event in trace):
+        raise RuntimeError("agent-visible investigation prompt is absent")
+    if any(event.get("finish_reason") == "length" for event in trace
+           if event.get("event") in ("action_selected", "conclusion")):
+        raise RuntimeError("model response ended at its token limit")
+    return result, trace
+
+
+# --- one run --------------------------------------------------------------
+
+def new_manifest(case: Case, retrieval: str, run_id: str) -> dict:
     source = command(["git", "rev-parse", "HEAD"])
     dirty = command(["git", "status", "--porcelain"])
-    manifest = {
-        "schema_version": PROTOCOL_VERSION,
-        "run_id": run_id,
-        "compose_project": PROJECT,
-        "case": case.name,
-        "fault_id": case.fault_id,
-        "fault_script": case.script,
+    env = isolated_env()
+    return {
+        "schema_version": PROTOCOL_VERSION, "run_id": run_id, "compose_project": stack.project(),
+        "case": case.name, "fault_id": case.fault_id, "fault_script": case.script,
         "fault_script_sha256": sha256(ROOT / "fault-injection" / case.script) if case.script else None,
         "source_commit": source.stdout.strip() if source.returncode == 0 else None,
-        "source_dirty": bool(dirty.stdout.strip()),
-        "retrieval_mode": retrieval,
-        "model_id": os.environ.get("MODEL_ID"),
-        "model_settings": None,
-        "traffic_profile": {key: isolated_env()[key] for key in
-                            ("TRAFFIC_SEED", "TRAFFIC_INTERVAL_SECONDS",
-                             "TRAFFIC_FRAUD_PROBABILITY", "TRAFFIC_USER_LIMIT")},
-        "created_at_utc": utc_now(),
-        "status": "created",
-        "validity_errors": [],
+        "source_dirty": bool(dirty.stdout.strip()), "retrieval_mode": retrieval,
+        "model_id": env.get("MODEL_ID"), "model_settings": None,
+        "geoip_source": env.get("GEOIP_DATA") or "maxmind volume",
+        "traffic_profile": {key: env[key] for key in ("TRAFFIC_SEED", "TRAFFIC_INTERVAL_SECONDS",
+                                                      "TRAFFIC_FRAUD_PROBABILITY", "TRAFFIC_USER_LIMIT")},
+        "created_at_utc": utc_now(), "status": "created", "validity_errors": [],
     }
+
+
+def preflight(manifest: dict) -> None:
+    healthy, states = stack_health()
+    manifest["preflight_at_utc"] = utc_now()
+    manifest["preflight_states"] = states
+    if not healthy:
+        raise RuntimeError("required Compose services are not all running")
+    marker_valid, marker_error = verify_stack_marker()
+    if not marker_valid:
+        raise RuntimeError(marker_error)
+    manifest["container_image_ids"] = container_images()
+    manifest["prometheus_up_before"] = prometheus_health()
+    manifest["traffic_probe"] = traffic_probe()
+    manifest["topic_end_offsets_before"] = topic_end_offsets()
+    manifest["redis_key_counts_before"] = redis_key_counts()
+
+
+def run_case(case: Case, retrieval: str, runs_dir: Path = RUNS) -> Path:
+    run_id = "inc-" + uuid.uuid4().hex
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    manifest_path = run_dir / "manifest.json"
+    manifest = new_manifest(case, retrieval, run_id)
     write_manifest(manifest_path, manifest)
-    injected = False
+    injected = interrupted = False
     try:
-        # Same validation and settings the agent will use; fails before injection.
-        agent_config = AgentConfig.from_env({**isolated_env(), "RUN_TAG": run_id,
-                                             "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
+        # 1. Model settings: the same validation the agent will apply.
+        agent_env = agent_environment(run_id, run_dir, retrieval)
+        agent_config = AgentConfig.from_env(agent_env)
         manifest["model_id"] = agent_config.model_id
         manifest["model_settings"] = agent_config.model_settings.as_dict()
         if retrieval == "on":
@@ -312,30 +415,17 @@ def run_case(case: Case, retrieval: str) -> Path:
             if error:
                 raise RuntimeError(error)
             manifest["retrieval_index"] = json.loads(
-                (Path(os.environ["CHROMA_DIR"]) / "index_manifest.json").read_text(encoding="utf-8")
-            )
-        healthy, states = stack_health()
-        manifest["preflight_at_utc"] = utc_now()
-        manifest["preflight_states"] = states
-        if not healthy:
-            raise RuntimeError("required Compose services are not all running")
-        marker_valid, marker_error = verify_stack_marker()
-        if not marker_valid:
-            raise RuntimeError(marker_error)
-        manifest["stack_baseline"] = json.loads(STACK_MARKER.read_text(encoding="utf-8"))
-        manifest["container_image_ids"] = container_images()
-        manifest["prometheus_up_before"] = prometheus_health()
-        manifest["traffic_probe"] = traffic_probe()
-        manifest["topic_end_offsets_before"] = topic_end_offsets()
-        manifest["redis_key_counts_before"] = redis_key_counts()
-        marker = manifest["stack_baseline"].copy()
-        marker.update({"used_run_id": run_id, "used_at_utc": utc_now()})
-        write_manifest(STACK_MARKER, marker)
+                (Path(os.environ["CHROMA_DIR"]) / "index_manifest.json").read_text(encoding="utf-8"))
+
+        # 2. Preflight on a clean stack, then use up its marker.
+        preflight(manifest)
+        manifest["stack_baseline"] = consume_marker(run_id)
         manifest["status"] = "preflight_passed"
         write_manifest(manifest_path, manifest)
 
+        # 3. Injection.
         if case.script:
-            injected = True  # also restore if injection partially fails
+            injected = True  # restore even if injection fails part way
             manifest["inject_started_at_utc"] = utc_now()
             injected_result = script_action(case, "inject", run_dir)
             manifest["inject_ended_at_utc"] = utc_now()
@@ -346,42 +436,17 @@ def run_case(case: Case, retrieval: str) -> Path:
             if not live:
                 raise RuntimeError("fault injection returned success but its live-state probe failed")
 
-        env = isolated_env()
-        for name in ("FAULT_ID", "FAULT_NAME", "FAULT_FAMILY"):
-            env.pop(name, None)
-        env.update({"RUN_TAG": run_id, "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
+        # 4. Investigation.
         manifest["agent_started_at_utc"] = utc_now()
         write_manifest(manifest_path, manifest)
-        result = command([agent_python(), "-m", "agent.run"], timeout=1800, env=env)
+        result = command([agent_python(), "-m", "agent.run"], timeout=1800, env=agent_env)
         manifest["agent_ended_at_utc"] = utc_now()
         (run_dir / "agent.stdout.log").write_text(result.stdout, encoding="utf-8")
         (run_dir / "agent.stderr.log").write_text(result.stderr, encoding="utf-8")
         manifest["agent_exit_code"] = result.returncode
         if result.returncode != 0:
             raise RuntimeError(f"agent exited with code {result.returncode}")
-        result_path = run_dir / f"{run_id}.result.json"
-        if not result_path.exists() or json.loads(result_path.read_text(encoding="utf-8")).get("status") != "completed":
-            raise RuntimeError("agent result is absent or not completed")
-        agent_result = json.loads(result_path.read_text(encoding="utf-8"))
-        if agent_result.get("root_cause_id") == "PARSE_FAILURE":
-            raise RuntimeError("agent conclusion could not be parsed")
-        trace_path = run_dir / f"{run_id}.trace.jsonl"
-        if not trace_path.exists():
-            raise RuntimeError("agent trace is absent")
-        trace = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-        if not trace or trace[0].get("event") != "investigation_started":
-            raise RuntimeError("agent trace header is absent")
-        if any(key in trace[0] for key in ("fault_id", "fault_name", "fault_family")):
-            raise RuntimeError("fault metadata leaked into the agent trace header")
-        tool_names = {spec.get("name") for spec in trace[0].get("tool_specs", [])}
-        if tool_names != {"query_logs", "get_metrics", "list_metric_names", "get_container_state", "read_config"}:
-            raise RuntimeError(f"agent received an unexpected tool set: {sorted(tool_names)}")
-        if not any(event.get("event") == "action_selected" and event.get("agent_visible_prompt")
-                   for event in trace):
-            raise RuntimeError("agent-visible investigation prompt is absent")
-        if any(event.get("finish_reason") == "length" for event in trace
-               if event.get("event") in ("action_selected", "conclusion")):
-            raise RuntimeError("model response ended at its token limit")
+        agent_result, trace = check_agent_artifacts(run_dir, run_id)
         observations = [event["ts"] for event in trace if event.get("event") == "tool_call"]
         manifest["first_observation_at_utc"] = min(observations) if observations else None
         manifest["last_observation_at_utc"] = max(observations) if observations else None
@@ -393,74 +458,72 @@ def run_case(case: Case, retrieval: str) -> Path:
                 raise RuntimeError("fault ended before the agent completed")
         manifest["status"] = "agent_completed"
     except (Exception, KeyboardInterrupt) as error:
-        manifest["validity_errors"].append(str(error))
+        interrupted = isinstance(error, KeyboardInterrupt)
+        manifest["validity_errors"].append("interrupted" if interrupted else str(error))
         manifest["status"] = "invalid"
     finally:
+        # 5. Restoration, processing check and post-run state, whatever happened.
         if injected:
             manifest["restore_started_at_utc"] = utc_now()
             try:
-                restored = script_action(case, "restore", run_dir)
-                manifest["restore_ended_at_utc"] = utc_now()
-                manifest["restore_exit_code"] = restored.returncode
-                if restored.returncode != 0:
-                    manifest["validity_errors"].append("restore script failed")
-                for _ in range(120):
-                    recovered, state = fault_is_restored(case)
-                    if recovered:
-                        break
-                    time.sleep(1)
-                manifest["recovery_probe"] = {"at_utc": utc_now(), "recovered": recovered, "state": state}
-                if not recovered:
-                    manifest["validity_errors"].append("target did not recover")
+                errors, manifest["recovery_probe"] = restore_and_wait(case, run_dir)
+                manifest["validity_errors"].extend(errors)
             except Exception as error:
                 manifest["validity_errors"].append(f"restore exception: {error}")
+        if "preflight_states" in manifest:
+            try:
+                manifest["processing_probe"] = wait_for_growth("enriched_transactions", RECOVERY_SECONDS)
+                if not manifest["processing_probe"]["grew"]:
+                    manifest["validity_errors"].append("enriched output did not resume after the run")
+            except Exception as error:
+                manifest["validity_errors"].append(f"processing probe failed: {error}")
         try:
             manifest["topic_end_offsets_after"] = topic_end_offsets()
             manifest["redis_key_counts_after"] = redis_key_counts()
         except Exception as error:
             manifest["validity_errors"].append(f"post-run state capture failed: {error}")
-        if not manifest["validity_errors"] and manifest["status"] == "agent_completed":
-            manifest["status"] = "completed"
-        else:
-            manifest["status"] = "invalid"
+        ok = not manifest["validity_errors"] and manifest["status"] == "agent_completed"
+        manifest["status"] = "completed" if ok else "invalid"
         manifest["finished_at_utc"] = utc_now()
         write_manifest(manifest_path, manifest)
+    if interrupted:
+        raise KeyboardInterrupt
     return run_dir
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--init-stack", action="store_true")
     parser.add_argument("--case", choices=CASES)
     parser.add_argument("--retrieval", choices=("off", "on"), default="off")
+    parser.add_argument("--runs-dir", type=Path, default=RUNS,
+                        help="where run folders go (default experiments/runs/v2, the scored population)")
     args = parser.parse_args()
     if args.list:
         for case in CASES.values():
             print(f"{case.name}: {case.script or 'no injection'}")
         return 0
     if args.init_stack:
-        initialize_stack()
-        print(f"initialized clean stack: {STACK_MARKER}")
+        print(f"initialized clean stack: {initialize_stack()}")
         return 0
     if args.preflight:
         healthy, states = stack_health()
         marker_valid, marker_error = verify_stack_marker()
-        observation_error = ""
-        observations = {}
+        observation_error, observations = "", {}
         if healthy and marker_valid:
             try:
                 observations = {"prometheus_up": prometheus_health(), "traffic": traffic_probe()}
             except Exception as error:
                 observation_error = str(error)
-        print(json.dumps({"healthy": healthy, "marker_valid": marker_valid,
+        print(json.dumps({"compose_project": stack.project(), "healthy": healthy, "marker_valid": marker_valid,
                           "marker_error": marker_error, "observation_error": observation_error,
                           "observations": observations, "states": states}, indent=2))
         return 0 if healthy and marker_valid and not observation_error else 1
     if not args.case:
-        parser.error("--case is required unless --list or --preflight is used")
-    path = run_case(CASES[args.case], args.retrieval)
+        parser.error("--case is required unless --list, --init-stack or --preflight is used")
+    path = run_case(CASES[args.case], args.retrieval, args.runs_dir)
     result = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
     print(f"{result['status']}: {path}")
     return 0 if result["status"] == "completed" else 1

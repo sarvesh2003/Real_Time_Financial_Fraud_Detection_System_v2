@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 import time
 import uuid
 from collections import Counter
@@ -19,39 +18,8 @@ from pathlib import Path
 
 import grpc
 
-from experiments.stack import ROOT, isolated_env
+from experiments.stack import all_offsets, compose, isolated_env, read_json_records, records_added
 from proto.fraud.v1 import fraud_pb2, fraud_pb2_grpc
-
-TOPICS = ("raw_transactions", "enriched_transactions", "raw_transactions_dlq")
-
-
-def compose(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), *args],
-                          cwd=ROOT, env=isolated_env(), text=True, capture_output=True,
-                          timeout=timeout, encoding="utf-8", errors="replace", check=True)
-
-
-def offsets(topic: str) -> dict[int, int]:
-    topics = set(compose("exec", "-T", "kafka", "kafka-topics", "--bootstrap-server",
-                         "kafka:29092", "--list").stdout.splitlines())
-    if topic not in topics:
-        return {}
-    output = compose("exec", "-T", "kafka", "kafka-get-offsets", "--bootstrap-server",
-                     "kafka:29092", "--topic", topic, "--time", "-1").stdout
-    result = {}
-    for line in output.splitlines():
-        name, partition, offset = line.rsplit(":", 2)
-        if name == topic:
-            result[int(partition)] = int(offset)
-    return result
-
-
-def all_offsets() -> dict[str, dict[int, int]]:
-    return {topic: offsets(topic) for topic in TOPICS}
-
-
-def delta(before: dict[int, int], after: dict[int, int]) -> int:
-    return sum(value - before.get(partition, 0) for partition, value in after.items())
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -60,27 +28,10 @@ def percentile(values: list[float], fraction: float) -> float:
     return round(ordered[index], 3)
 
 
-def consume_output(before: dict[int, int], after: dict[int, int]) -> list[dict]:
-    records = []
-    for partition, end in sorted(after.items()):
-        count = end - before.get(partition, 0)
-        if count <= 0:
-            continue
-        output = compose("exec", "-T", "kafka", "kafka-console-consumer",
-                         "--bootstrap-server", "kafka:29092", "--topic", "enriched_transactions",
-                         "--partition", str(partition), "--offset", str(before.get(partition, 0)),
-                         "--max-messages", str(count), "--timeout-ms", "30000", timeout=45).stdout
-        parsed = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
-        if len(parsed) != count:
-            raise RuntimeError(f"partition {partition}: expected {count} output records, got {len(parsed)}")
-        records.extend(parsed)
-    return records
-
-
 def run_probe(count: int, workers: int, wait_seconds: int) -> dict:
     if count < 1 or workers < 1:
         raise ValueError("count and workers must be positive")
-    running_producer = compose("ps", "--status", "running", "-q", "python-producer").stdout.strip()
+    running_producer = compose("ps", "--status", "running", "-q", "python-producer", check=True).stdout.strip()
     if running_producer:
         raise RuntimeError("stop python-producer before a controlled reconciliation")
     before = all_offsets()
@@ -97,7 +48,7 @@ def run_probe(count: int, workers: int, wait_seconds: int) -> dict:
     latencies_ms = []
     failures = []
     started = time.perf_counter()
-    with grpc.insecure_channel("localhost:15051") as channel:
+    with grpc.insecure_channel(f"localhost:{isolated_env()['GRPC_HOST_PORT']}") as channel:
         stub = fraud_pb2_grpc.FraudIngestionStub(channel)
         def send(request):
             call_start = time.perf_counter()
@@ -118,18 +69,18 @@ def run_probe(count: int, workers: int, wait_seconds: int) -> dict:
     expected = len(latencies_ms)
     deadline = time.monotonic() + wait_seconds
     after = all_offsets()
-    while time.monotonic() < deadline and delta(before["enriched_transactions"], after["enriched_transactions"]) < expected:
+    while time.monotonic() < deadline and records_added(before["enriched_transactions"], after["enriched_transactions"]) < expected:
         time.sleep(1)
         after = all_offsets()
-    records = consume_output(before["enriched_transactions"], after["enriched_transactions"])
+    records = read_json_records("enriched_transactions", before["enriched_transactions"], after["enriched_transactions"])
     output_ids = Counter(record.get("transaction_id") for record in records)
     expected_ids = set(ids) - set(failures)
     missing = sorted(expected_ids - output_ids.keys())
     unexpected = sorted(output_ids.keys() - expected_ids)
     duplicates = sorted(transaction_id for transaction_id, seen in output_ids.items() if seen > 1)
-    raw_delta = delta(before["raw_transactions"], after["raw_transactions"])
-    enriched_delta = delta(before["enriched_transactions"], after["enriched_transactions"])
-    dead_letter_delta = delta(before["raw_transactions_dlq"], after["raw_transactions_dlq"])
+    raw_delta = records_added(before["raw_transactions"], after["raw_transactions"])
+    enriched_delta = records_added(before["enriched_transactions"], after["enriched_transactions"])
+    dead_letter_delta = records_added(before["raw_transactions_dlq"], after["raw_transactions_dlq"])
     passed = not failures and raw_delta == count and enriched_delta == count and dead_letter_delta == 0 and not missing and not unexpected and not duplicates
     return {
         "schema_version": "2.0", "probe_id": probe_id,
