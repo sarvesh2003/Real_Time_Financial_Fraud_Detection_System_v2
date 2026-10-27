@@ -24,7 +24,7 @@ Import boundaries: `agent/*.py` import each other as top-level modules (`from co
 
 ## Frozen external contracts
 
-1. **Protobuf/gRPC:** `fraud.v1.FraudIngestion/SendTransaction`, `TransactionRequest` fields and numbers, `IngestionResponse{success,message}`. Status codes: `InvalidArgument` (bad input), `ResourceExhausted` (rate limit), `Unavailable` (Redis/Kafka), context error on deadline. Generated code is not edited.
+1. **Protobuf/gRPC:** `fraud.FraudIngestion/SendTransaction` (proto package `fraud`), `TransactionRequest` fields and numbers, `IngestionResponse{success,message}`. Status codes: `InvalidArgument` (bad input), `ResourceExhausted` (rate limit), `Unavailable` (Redis/Kafka), context error on deadline. Generated code is not edited.
 2. **Kafka:** topics `raw_transactions` (key `user_id`, protobuf), `enriched_transactions` (key `transaction_id`, JSON field names in `go-enricher/models.go`), `raw_transactions_dlq` (key = raw key; JSON `reason`, `source_topic`, `source_partition`, `source_offset`, `payload_base64`). Consumer group `fraud-enricher`.
 3. **At-least-once:** ingress acknowledges after broker delivery; enricher delivers output or DLQ before committing the raw offset; replay can duplicate output. No exactly-once claim.
 4. **Redis window:** atomic Lua; processing time; two-hour window; dedup key `dedup:{ip}:txn` for seven days, scoped to one IP; keys use `{ip}` hash tags. Output field names `txn_count_2h` etc.
