@@ -2,12 +2,28 @@
 
 This is a traffic source, not a fraud classifier. The fraud flag is sampled
 here and passed through the pipeline as input data.
+
+Workload (all from TrafficSettings):
+- A fixed pool of the first TRAFFIC_USER_LIMIT user IDs. Each customer gets a
+  home IP and three IPs in the same /8 when the generator is built.
+- Each request picks a customer at random and is flagged fraud with
+  TRAFFIC_FRAUD_PROBABILITY. Legitimate requests use the home IP 85% of the
+  time, a domestic IP 10%, a random public IP 5%; fraud uses a random public
+  IP 80%, otherwise an address in the home /16.
+- Amounts and balances are sampled from the SDV model conditioned on the flag.
+- One request at a time, TRAFFIC_INTERVAL_SECONDS apart, each with a
+  TRAFFIC_TIMEOUT_SECONDS deadline. A failed request waits an extra
+  ERROR_BACKOFF_SECONDS. SIGINT/SIGTERM stop after the request in flight.
+
+TRAFFIC_SEED fixes the customer pool and the sequence of users, IPs, flags,
+transaction IDs and sampled amounts (SDV draws from NumPy's global random
+state, so use one generator per process). Timestamps are wall-clock time.
 """
 
 from __future__ import annotations
 
-import csv
 import contextlib
+import csv
 import io
 import logging
 import math
@@ -18,6 +34,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Mapping
 
 import grpc
 import numpy as np
@@ -27,10 +44,46 @@ from sdv.single_table import GaussianCopulaSynthesizer
 
 from proto.fraud.v1 import fraud_pb2, fraud_pb2_grpc
 
-
 LOG = logging.getLogger("transaction-producer")
-MODEL_PATH = Path("model_gaussian_20L.pkl")
-USERS_PATH = Path("userIds_10k.csv")
+ASSETS = Path(__file__).resolve().parent / "transaction-generator-models"
+MODEL_PATH = ASSETS / "model_gaussian_20L.pkl"
+USERS_PATH = ASSETS / "userIds_10k.csv"
+ERROR_BACKOFF_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class TrafficSettings:
+    seed: int = 20261010
+    user_limit: int = 50
+    interval_seconds: float = 0.2
+    fraud_probability: float = 0.05
+    timeout_seconds: float = 10.0
+    address: str = "localhost:50051"
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "TrafficSettings":
+        env = os.environ if env is None else env
+        defaults = cls()
+        try:
+            settings = cls(
+                seed=int(env.get("TRAFFIC_SEED", defaults.seed)),
+                user_limit=int(env.get("TRAFFIC_USER_LIMIT", defaults.user_limit)),
+                interval_seconds=float(env.get("TRAFFIC_INTERVAL_SECONDS", defaults.interval_seconds)),
+                fraud_probability=float(env.get("TRAFFIC_FRAUD_PROBABILITY", defaults.fraud_probability)),
+                timeout_seconds=float(env.get("TRAFFIC_TIMEOUT_SECONDS", defaults.timeout_seconds)),
+                address=env.get("GRPC_SERVER_ADDRESS", defaults.address),
+            )
+        except ValueError as error:
+            raise ValueError(f"invalid traffic setting: {error}") from None
+        if settings.user_limit < 1:
+            raise ValueError("TRAFFIC_USER_LIMIT must be positive")
+        if not math.isfinite(settings.interval_seconds) or settings.interval_seconds < 0:
+            raise ValueError("TRAFFIC_INTERVAL_SECONDS must be finite and nonnegative")
+        if not 0 <= settings.fraud_probability <= 1:
+            raise ValueError("TRAFFIC_FRAUD_PROBABILITY must be between 0 and 1")
+        if not math.isfinite(settings.timeout_seconds) or settings.timeout_seconds <= 0:
+            raise ValueError("TRAFFIC_TIMEOUT_SECONDS must be positive")
+        return settings
 
 
 @dataclass(frozen=True)
@@ -115,16 +168,35 @@ class TransactionGenerator:
         )
 
 
+def send_loop(stub, generator, settings: TrafficSettings, should_stop: Callable[[], bool],
+              sleep: Callable[[float], None] = time.sleep) -> dict[str, int]:
+    """Send one request at a time until should_stop(); returns outcome counts.
+
+    gRPC errors, success=false replies and rejected samples are logged and
+    retried after a backoff. Any other exception is a bug and propagates.
+    """
+    sent = {"acknowledged": 0, "failed": 0}
+    while not should_stop():
+        try:
+            request = generator.make_request(settings.fraud_probability)
+            response = stub.SendTransaction(request, timeout=settings.timeout_seconds)
+            if not response.success:
+                raise RuntimeError(response.message or "server returned success=false")
+            sent["acknowledged"] += 1
+            LOG.info("acknowledged transaction_id=%s amount=%.2f", request.transaction_id, request.amount)
+        except (grpc.RpcError, RuntimeError, ValueError) as error:
+            sent["failed"] += 1
+            LOG.warning("transaction not acknowledged: %s", error)
+            sleep(ERROR_BACKOFF_SECONDS)
+        if settings.interval_seconds:
+            sleep(settings.interval_seconds)
+    return sent
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    seed = int(os.getenv("TRAFFIC_SEED", "20261010"))
-    user_limit = int(os.getenv("TRAFFIC_USER_LIMIT", "50"))
-    interval = float(os.getenv("TRAFFIC_INTERVAL_SECONDS", "0.2"))
-    fraud_probability = float(os.getenv("TRAFFIC_FRAUD_PROBABILITY", "0.05"))
-    if not math.isfinite(interval) or interval < 0:
-        raise ValueError("TRAFFIC_INTERVAL_SECONDS must be finite and nonnegative")
-    generator = TransactionGenerator(seed, user_limit)
-    address = os.getenv("GRPC_SERVER_ADDRESS", "localhost:50051")
+    settings = TrafficSettings.from_env()
+    generator = TransactionGenerator(settings.seed, settings.user_limit)
     stopping = False
 
     def request_stop(_signum, _frame):
@@ -133,22 +205,11 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
-    with grpc.insecure_channel(address) as channel:
-        stub = fraud_pb2_grpc.FraudIngestionStub(channel)
-        LOG.info("sending synthetic traffic to %s, seed=%d, interval=%.3fs", address, seed, interval)
-        while not stopping:
-            try:
-                request = generator.make_request(fraud_probability)
-                response = stub.SendTransaction(request, timeout=10)
-                if not response.success:
-                    raise RuntimeError(response.message or "server returned success=false")
-                LOG.info("acknowledged transaction_id=%s amount=%.2f", request.transaction_id, request.amount)
-            except (grpc.RpcError, RuntimeError, ValueError, KeyError, TypeError) as error:
-                LOG.warning("transaction not acknowledged: %s", error)
-                time.sleep(1)
-            if interval:
-                time.sleep(interval)
-    LOG.info("traffic producer stopped")
+    with grpc.insecure_channel(settings.address) as channel:
+        LOG.info("sending synthetic traffic to %s, seed=%d, interval=%.3fs",
+                 settings.address, settings.seed, settings.interval_seconds)
+        sent = send_loop(fraud_pb2_grpc.FraudIngestionStub(channel), generator, settings, lambda: stopping)
+    LOG.info("traffic producer stopped: %s", sent)
 
 
 if __name__ == "__main__":
