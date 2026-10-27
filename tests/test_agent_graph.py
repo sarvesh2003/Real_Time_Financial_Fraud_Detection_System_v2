@@ -2,12 +2,9 @@
 
 import asyncio
 import json
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
-from graph import TOOL_CALL_BUDGET, build_graph
+from agent.graph import TOOL_CALL_BUDGET, build_graph
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 

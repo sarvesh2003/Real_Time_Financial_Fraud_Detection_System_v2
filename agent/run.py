@@ -15,9 +15,9 @@ from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 
-from config import AgentConfig
-from graph import COLLECTION_NAME, SYSTEM_PROMPT, InvestigationState, TOOL_CALL_BUDGET, build_graph
-from report import build_result
+from agent.config import AgentConfig
+from agent.graph import COLLECTION_NAME, SYSTEM_PROMPT, InvestigationState, TOOL_CALL_BUDGET, build_graph
+from agent.report import build_result
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 

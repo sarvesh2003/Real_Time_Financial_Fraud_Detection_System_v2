@@ -11,7 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
-from tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
+from agent.tools import MAX_OBSERVATION_CHARS, observe, usable_evidence
 
 AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = AGENT_DIR.parent

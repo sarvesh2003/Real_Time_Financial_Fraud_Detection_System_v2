@@ -349,7 +349,7 @@ def run_case(case: Case, retrieval: str) -> Path:
         env.update({"RUN_TAG": run_id, "RESULTS_DIR": str(run_dir), "RETRIEVAL_MODE": retrieval})
         manifest["agent_started_at_utc"] = utc_now()
         write_manifest(manifest_path, manifest)
-        result = command([agent_python(), str(ROOT / "agent" / "run.py")], timeout=1800, env=env)
+        result = command([agent_python(), "-m", "agent.run"], timeout=1800, env=env)
         manifest["agent_ended_at_utc"] = utc_now()
         (run_dir / "agent.stdout.log").write_text(result.stdout, encoding="utf-8")
         (run_dir / "agent.stderr.log").write_text(result.stderr, encoding="utf-8")
