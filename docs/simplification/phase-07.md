@@ -6,7 +6,7 @@
 
 ## Archive
 
-Moved with `git mv` (contents unchanged, baseline-relative paths kept) into `archive/pre-simplify/`: both root plans/audits, the 2026-10-14 review, the completion plan, the legacy README, the legacy producer script, the stale public Compose file and `Chatgpt_Documentation/`. The [index](../../archive/pre-simplify/README.md) gives the baseline tag/SHA, original paths, the reason each was archived and what was carried into current docs. Not moved: `Simplify.md`, the runtime prompt, fixtures, schemas, generated code, requirement files, and `eval/` (left in place, labelled by `eval/README.md`).
+Moved with `git mv` (contents unchanged, baseline-relative paths kept) into `archive/pre-simplify/`: both root plans/audits, the 2026-10-14 review, the completion plan, the legacy README, the legacy producer script, the stale public Compose file and `archive/pre-simplify/Chatgpt_Documentation/` (formerly at the root). The [index](../../archive/pre-simplify/README.md) gives the baseline tag/SHA, original paths, the reason each was archived and what was carried into current docs. Not moved: `Simplify.md`, the runtime prompt, fixtures, schemas, generated code, requirement files, and `eval/` (left in place, labelled by `eval/README.md`).
 
 **Public Compose decision:** `docker-compose.public.yml` used older prebuilt images without the current observability setup and was never verified for V2, so it is archived; `docker-compose.yaml` is the only supported stack.
 
