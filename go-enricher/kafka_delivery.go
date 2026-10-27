@@ -11,6 +11,15 @@ import (
 
 const deadLetterTopic = "raw_transactions_dlq"
 
+func producerConfig(broker string) *kafka.ConfigMap {
+	return &kafka.ConfigMap{
+		"bootstrap.servers":   broker,
+		"enable.idempotence":  true,
+		"acks":                "all",
+		"delivery.timeout.ms": 10000,
+	}
+}
+
 // A successful Produce call only means that librdkafka queued the message.
 // The delivery event confirms that the broker accepted it.
 func publishSync(producer *kafka.Producer, message *kafka.Message) error {
@@ -33,7 +42,8 @@ func publishSync(producer *kafka.Producer, message *kafka.Message) error {
 	}
 }
 
-func publishDeadLetter(producer *kafka.Producer, source *kafka.Message, reason string) error {
+// deadLetterMessage wraps the unmodified raw bytes with their source position.
+func deadLetterMessage(source *kafka.Message, reason string) (*kafka.Message, error) {
 	record := struct {
 		Reason          string `json:"reason"`
 		SourceTopic     string `json:"source_topic"`
@@ -49,13 +59,13 @@ func publishDeadLetter(producer *kafka.Producer, source *kafka.Message, reason s
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("encode dead-letter record: %w", err)
+		return nil, fmt.Errorf("encode dead-letter record: %w", err)
 	}
-	return publishSync(producer, &kafka.Message{
+	return &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: stringPointer(deadLetterTopic), Partition: kafka.PartitionAny},
 		Key:            source.Key,
 		Value:          payload,
-	})
+	}, nil
 }
 
 func stringPointer(value string) *string { return &value }
