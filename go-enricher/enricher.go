@@ -101,6 +101,7 @@ func run() error {
 		return fmt.Errorf("create Kafka producer: %w", err)
 	}
 	defer producer.Close()
+	go logProducerErrors(producer)
 
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":        config.broker,

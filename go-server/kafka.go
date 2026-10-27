@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
@@ -52,5 +53,16 @@ func (p kafkaPublisher) Publish(ctx context.Context, key, value []byte) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// logProducerErrors drains client-level events. Per-record delivery reports
+// go to their own channels; without this, broker errors would queue unread
+// on Events() and never reach the service log.
+func logProducerErrors(producer *kafka.Producer) {
+	for event := range producer.Events() {
+		if err, ok := event.(kafka.Error); ok {
+			log.Printf("Kafka producer error: %v", err)
+		}
 	}
 }

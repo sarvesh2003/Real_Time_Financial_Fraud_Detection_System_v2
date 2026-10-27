@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
@@ -69,3 +70,14 @@ func deadLetterMessage(source *kafka.Message, reason string) (*kafka.Message, er
 }
 
 func stringPointer(value string) *string { return &value }
+
+// logProducerErrors drains client-level events. Per-record delivery reports
+// go to their own channels; without this, broker errors would queue unread
+// on Events() and never reach the service log.
+func logProducerErrors(producer *kafka.Producer) {
+	for event := range producer.Events() {
+		if err, ok := event.(kafka.Error); ok {
+			log.Printf("Kafka producer error: %v", err)
+		}
+	}
+}

@@ -94,6 +94,7 @@ func main() {
 		log.Fatalf("Failed to create producer: %v", err)
 	}
 	defer producer.Close()
+	go logProducerErrors(producer)
 
 	redisCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := initializeRedis(redisCtx)
