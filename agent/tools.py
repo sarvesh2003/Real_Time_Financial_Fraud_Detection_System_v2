@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 # It bounds characters, not model tokens or the context window.
 MAX_OBSERVATION_CHARS = 2000
 
+# The five read-only MCP tools an investigation requires (and may use).
+REQUIRED_TOOLS = frozenset({"query_logs", "get_metrics", "list_metric_names", "get_container_state", "read_config"})
+
 # Share of the limit kept from the start when a reply is still too long. The
 # start states errors and omission counts; the end holds the newest lines.
 _HEAD_FRACTION = 0.25

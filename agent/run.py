@@ -23,11 +23,10 @@ from langchain_openai import ChatOpenAI
 from agent.config import AgentConfig
 from agent.graph import COLLECTION_NAME, SYSTEM_PROMPT, TOOL_CALL_BUDGET, InvestigationState, build_graph
 from agent.report import build_result
-from agent.tools import MAX_OBSERVATION_CHARS
+from agent.tools import MAX_OBSERVATION_CHARS, REQUIRED_TOOLS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TRIGGER = "Assess the current operational health of the transaction pipeline. Report a supported issue or say if the evidence is insufficient."
-REQUIRED_TOOLS = frozenset({"query_logs", "get_metrics", "list_metric_names", "get_container_state", "read_config"})
 
 
 def mcp_server_env(base: dict[str, str] | None = None) -> dict[str, str]:

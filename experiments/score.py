@@ -53,11 +53,13 @@ def summarize(manifests: list[dict], labels: dict[str, dict[str, str]]) -> dict:
         ):
             raise ValueError(f"valid run {run_id} needs diagnosis and evidence labels")
     valid = [m for m in machine_valid if labels[m["run_id"]]["run_validity"] == "valid"]
+    machine_valid_ids = {m["run_id"] for m in machine_valid}
+    valid_ids = {m["run_id"] for m in valid}
     invalid_reasons = Counter()
     for manifest in manifests:
-        if manifest not in machine_valid:
+        if manifest["run_id"] not in machine_valid_ids:
             invalid_reasons.update(manifest.get("validity_errors", []) or [manifest.get("status", "unknown")])
-        elif manifest not in valid:
+        elif manifest["run_id"] not in valid_ids:
             invalid_reasons.update(["human review: " + labels[manifest["run_id"]]["validity_reason"]])
     by_condition = defaultdict(lambda: Counter())
     for manifest in valid:
@@ -103,15 +105,17 @@ def load_labels(path: Path) -> dict[str, dict[str, str]]:
     return labels
 
 
+def load_manifests(runs: Path) -> list[dict]:
+    return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(runs.glob("*/manifest.json"))]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=Path, default=RUNS)
     parser.add_argument("--labels", type=Path, default=LABELS)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    manifests = [json.loads(path.read_text(encoding="utf-8"))
-                 for path in sorted(args.runs.glob("*/manifest.json"))]
-    result = summarize(manifests, load_labels(args.labels))
+    result = summarize(load_manifests(args.runs), load_labels(args.labels))
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")
