@@ -6,6 +6,8 @@ A production-grade distributed fraud detection platform processing 9,000+ transa
 
 > **Version 1:** [Available here](https://github.com/sarvesh2003/Fraud-Detection-System) - includes PyFlink ML inference, Airflow MLOps pipeline, and model versioning with DVC/MLflow.
 
+> **Update in progress:** Adding Kubernetes deployment, automated tests and CI, and general cleanup. These changes will be added here once they're complete.
+
 ## Performance Metrics
 
 | Metric | Value | Test Conditions |
